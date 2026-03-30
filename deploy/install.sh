@@ -254,7 +254,7 @@ After=network.target cups.service
 Wants=cups.service
 
 [Service]
-Type=notify
+Type=simple
 ExecStart=${EXEC}
 WorkingDirectory=${INSTALL_DIR}
 Restart=always

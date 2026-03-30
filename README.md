@@ -288,7 +288,7 @@ Initial config via `appsettings.json`:
 ```json
 {
   "Print": {
-    "ServerUrl": "https://your-server",
+    "ServerUrl": "your-server",
     "Port": "5230"
   }
 }
@@ -298,5 +298,5 @@ After first run, use the API to update settings (persists to SQLite):
 ```bash
 curl -X PUT http://localhost:5230/api/settings \
   -H "Content-Type: application/json" \
-  -d '{"serverUrl": "https://your-server", "serviceId": "office-printer"}'
+  -d '{"serverUrl": "your-server", "serviceId": "office-printer"}'
 ```
