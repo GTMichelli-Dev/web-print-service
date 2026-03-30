@@ -4,11 +4,15 @@
 # =============================================================================
 # Run directly on the Pi:
 #
-#   curl -sSL https://raw.githubusercontent.com/GTMichelli-Dev/web-print-service/main/deploy/install.sh | bash -s -- <web-server-url>
+#   git clone https://github.com/GTMichelli-Dev/web-print-service.git /tmp/wps
+#   bash /tmp/wps/deploy/install.sh <web-server-url>
+#   rm -rf /tmp/wps
 #
 # Examples:
-#   curl -sSL https://raw.githubusercontent.com/GTMichelli-Dev/web-print-service/main/deploy/install.sh | bash -s -- http://basicscale.scaledata.net
-#   curl -sSL https://raw.githubusercontent.com/GTMichelli-Dev/web-print-service/main/deploy/install.sh | bash -s -- http://basicscale.scaledata.net --service-id office --port 5230
+#   git clone https://github.com/GTMichelli-Dev/web-print-service.git /tmp/wps
+#   bash /tmp/wps/deploy/install.sh http://basicscale.scaledata.net
+#   bash /tmp/wps/deploy/install.sh http://basicscale.scaledata.net --service-id office --port 5230
+#   rm -rf /tmp/wps
 #
 # To update an existing install, run the same command again — it will
 # stop the service, update files, preserve the database, and restart.
@@ -67,7 +71,8 @@ if [ -z "$WEB_URL" ]; then
     echo "ERROR: Web server URL is required."
     echo ""
     echo "Usage:"
-    echo "  curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/${BRANCH}/deploy/install.sh | bash -s -- http://your-server:5110"
+    echo "  git clone https://github.com/${GITHUB_REPO}.git /tmp/wps"
+    echo "  bash /tmp/wps/deploy/install.sh http://your-server:5110"
     echo ""
     echo "Run with --help for all options."
     exit 1

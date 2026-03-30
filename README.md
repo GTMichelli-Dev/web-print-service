@@ -195,20 +195,26 @@ Uses CUPS command-line tools:
 
 ## Deployment
 
-### One-Command Install on Raspberry Pi / Linux
+### Install on Raspberry Pi / Linux
 
 SSH into the Pi and run:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/GTMichelli-Dev/web-print-service/main/deploy/install.sh | bash -s -- http://basicscale.scaledata.net
+git clone https://github.com/GTMichelli-Dev/web-print-service.git /tmp/wps
+bash /tmp/wps/deploy/install.sh http://basicscale.scaledata.net
+rm -rf /tmp/wps
 ```
 
 With options:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/GTMichelli-Dev/web-print-service/main/deploy/install.sh | bash -s -- \
-    http://basicscale.scaledata.net --service-id office --port 5230
+git clone https://github.com/GTMichelli-Dev/web-print-service.git /tmp/wps
+bash /tmp/wps/deploy/install.sh http://basicscale.scaledata.net \
+    --service-id office --port 5230
+rm -rf /tmp/wps
 ```
+
+For private repos, git will prompt for credentials. You can also use a deploy key or GitHub token.
 
 Options:
 | Option | Default | Description |
