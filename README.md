@@ -201,7 +201,7 @@ SSH into the Pi and run:
 
 ```bash
 git clone https://github.com/GTMichelli-Dev/web-print-service.git /tmp/wps
-bash /tmp/wps/deploy/install.sh http://basicscale.scaledata.net
+bash /tmp/wps/deploy/install.sh https://basicscale.scaledata.net
 rm -rf /tmp/wps
 ```
 
@@ -209,7 +209,7 @@ With options:
 
 ```bash
 git clone https://github.com/GTMichelli-Dev/web-print-service.git /tmp/wps
-bash /tmp/wps/deploy/install.sh http://basicscale.scaledata.net \
+bash /tmp/wps/deploy/install.sh https://basicscale.scaledata.net \
     --service-id office --port 5230
 rm -rf /tmp/wps
 ```
@@ -251,10 +251,10 @@ Options:
 Run PowerShell as Administrator:
 
 ```powershell
-.\deploy\deploy-to-windows.ps1 -WebServerUrl "http://basicscale.scaledata.net"
+.\deploy\deploy-to-windows.ps1 -WebServerUrl "https://basicscale.scaledata.net"
 
 # With options
-.\deploy\deploy-to-windows.ps1 -WebServerUrl "http://basicscale.scaledata.net" `
+.\deploy\deploy-to-windows.ps1 -WebServerUrl "https://basicscale.scaledata.net" `
     -ServiceId "office" -Port 5230
 ```
 
@@ -288,7 +288,7 @@ Initial config via `appsettings.json`:
 ```json
 {
   "Print": {
-    "ServerUrl": "http://your-server:5110",
+    "ServerUrl": "https://your-server",
     "Port": "5230"
   }
 }
@@ -298,5 +298,5 @@ After first run, use the API to update settings (persists to SQLite):
 ```bash
 curl -X PUT http://localhost:5230/api/settings \
   -H "Content-Type: application/json" \
-  -d '{"serverUrl": "http://your-server:5110", "serviceId": "office-printer"}'
+  -d '{"serverUrl": "https://your-server", "serviceId": "office-printer"}'
 ```
