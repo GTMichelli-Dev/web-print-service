@@ -227,14 +227,14 @@ Options:
 **What the script does automatically:**
 1. Detects Pi architecture (arm64, armv7l, x64)
 2. Installs CUPS (printer system)
-3. Installs .NET 8 ASP.NET Core runtime
+3. Installs .NET 8 SDK and runtime permanently (skips download on future updates)
 4. Downloads latest source from GitHub
 5. Builds for the Pi's architecture
 6. Installs to `/opt/web-print-service`
 7. Preserves existing database on updates
 8. Registers and starts as a systemd service
 
-**Prerequisites:** Just internet access and `curl` (pre-installed on Raspberry Pi OS). No .NET, no CUPS — the script installs everything.
+**Prerequisites:** Just internet access and `git` (pre-installed on Raspberry Pi OS). No .NET, no CUPS — the script installs everything. The .NET SDK is installed permanently so future updates skip the download.
 
 **To update:** Run the same command again. The script stops the service, updates files, preserves your database, and restarts.
 
