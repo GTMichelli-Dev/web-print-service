@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 
-namespace PiPrintService.Data;
+namespace WebPrintService.Data;
 
 public class PrintDbContext : DbContext
 {

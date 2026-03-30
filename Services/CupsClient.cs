@@ -1,13 +1,13 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 
-namespace PiPrintService.Services;
+namespace WebPrintService.Services;
 
 /// <summary>
 /// Wrapper around CUPS command-line tools (lpstat, lp, lpoptions).
 /// Works on Linux (Raspberry Pi) and macOS.
 /// </summary>
-public class CupsClient
+public class CupsClient : IPrintClient
 {
     private readonly ILogger<CupsClient> _log;
 
@@ -19,9 +19,9 @@ public class CupsClient
     /// <summary>
     /// Get all printers known to CUPS with their status.
     /// </summary>
-    public async Task<List<CupsPrinter>> GetPrintersAsync()
+    public async Task<List<PrinterInfo>> GetPrintersAsync()
     {
-        var printers = new List<CupsPrinter>();
+        var printers = new List<PrinterInfo>();
 
         try
         {
@@ -53,7 +53,7 @@ public class CupsClient
                     var name = match.Groups[1].Value;
                     var status = match.Groups[3].Value; // idle, disabled, printing
 
-                    printers.Add(new CupsPrinter
+                    printers.Add(new PrinterInfo
                     {
                         PrinterId = name,
                         DisplayName = name,
@@ -148,7 +148,7 @@ public class CupsClient
     /// <summary>
     /// Check if CUPS is available on this system.
     /// </summary>
-    public async Task<bool> IsCupsAvailableAsync()
+    public async Task<bool> IsAvailableAsync()
     {
         try
         {
@@ -186,11 +186,4 @@ public class CupsClient
     }
 }
 
-public class CupsPrinter
-{
-    public string PrinterId { get; set; } = "";
-    public string DisplayName { get; set; } = "";
-    public string Status { get; set; } = "unknown";
-    public bool IsDefault { get; set; }
-    public bool Enabled { get; set; } = true;
-}
+// PrinterInfo is defined in IPrintClient.cs

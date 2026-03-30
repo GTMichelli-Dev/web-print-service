@@ -1,4 +1,4 @@
-namespace PiPrintService.Services;
+namespace WebPrintService.Services;
 
 public class RestartSignal
 {

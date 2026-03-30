@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
-using PiPrintService;
-using PiPrintService.Data;
-using PiPrintService.Services;
+using WebPrintService;
+using WebPrintService.Data;
+using WebPrintService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,16 +9,23 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new() { Title = "Pi Print Service", Version = "v1" });
+    c.SwaggerDoc("v1", new() { Title = "Web Print Service", Version = "v1" });
 });
 builder.Services.AddControllers();
 
 // SQLite
 builder.Services.AddDbContext<PrintDbContext>(opt =>
-    opt.UseSqlite("Data Source=piprintservice.db"));
+    opt.UseSqlite("Data Source=webprintservice.db"));
 
-// Services
-builder.Services.AddSingleton<CupsClient>();
+// Services — register the right print client based on OS
+if (OperatingSystem.IsWindows())
+{
+    builder.Services.AddSingleton<IPrintClient, WindowsPrintClient>();
+}
+else
+{
+    builder.Services.AddSingleton<IPrintClient, CupsClient>();
+}
 builder.Services.AddSingleton<RestartSignal>();
 builder.Services.AddHostedService<PrintWorker>();
 builder.Services.AddHttpClient();
@@ -53,8 +60,10 @@ var port = builder.Configuration["Print:Port"] ?? "5230";
 app.Urls.Add($"http://*:{port}");
 
 var startLog = app.Services.GetRequiredService<ILogger<Program>>();
+var printSystem = OperatingSystem.IsWindows() ? "Windows Print" : "CUPS (Linux/macOS)";
 startLog.LogInformation("============================================");
-startLog.LogInformation("  Pi Print Service v1.0.0");
+startLog.LogInformation("  Web Print Service v1.0.0");
+startLog.LogInformation("  Print System: {PrintSystem}", printSystem);
 startLog.LogInformation("  Swagger: http://localhost:{Port}/swagger", port);
 startLog.LogInformation("============================================");
 

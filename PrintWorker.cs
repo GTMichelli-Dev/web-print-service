@@ -1,31 +1,31 @@
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.EntityFrameworkCore;
-using PiPrintService.Data;
-using PiPrintService.Services;
+using WebPrintService.Data;
+using WebPrintService.Services;
 using System.Text.Json;
 
-namespace PiPrintService;
+namespace WebPrintService;
 
 /// <summary>
 /// Background worker that connects to the web app via SignalR,
-/// listens for print commands, and prints via CUPS.
+/// listens for print commands, and prints via CUPS (Linux/macOS) or Windows Print.
 /// </summary>
 public class PrintWorker : BackgroundService
 {
     private readonly IServiceProvider _sp;
     private readonly ILogger<PrintWorker> _log;
-    private readonly CupsClient _cups;
+    private readonly IPrintClient _printer;
     private readonly RestartSignal _restart;
     private readonly IHttpClientFactory _httpFactory;
     private HubConnection? _connection;
     private string _serviceId = "default";
 
-    public PrintWorker(IServiceProvider sp, ILogger<PrintWorker> log, CupsClient cups,
+    public PrintWorker(IServiceProvider sp, ILogger<PrintWorker> log, IPrintClient printer,
         RestartSignal restart, IHttpClientFactory httpFactory)
     {
         _sp = sp;
         _log = log;
-        _cups = cups;
+        _printer = printer;
         _restart = restart;
         _httpFactory = httpFactory;
     }
@@ -106,7 +106,7 @@ public class PrintWorker : BackgroundService
 
         try
         {
-            var printers = await _cups.GetPrintersAsync();
+            var printers = await _printer.GetPrintersAsync();
             await _connection.InvokeAsync("PrintServiceReady", new
             {
                 serviceId = _serviceId,
@@ -157,7 +157,7 @@ public class PrintWorker : BackgroundService
                 else
                 {
                     // Use default printer
-                    var printers = await _cups.GetPrintersAsync();
+                    var printers = await _printer.GetPrintersAsync();
                     var defaultPrinter = printers.FirstOrDefault(p => p.IsDefault) ?? printers.FirstOrDefault();
                     if (defaultPrinter == null)
                     {
@@ -174,7 +174,7 @@ public class PrintWorker : BackgroundService
                 _log.LogInformation("Printing ticket {Ticket} to {Printer} from {Url}", ticketId, cupsPrinterId, pdfUrl);
 
                 var http = _httpFactory.CreateClient();
-                var (success, message) = await _cups.PrintFromUrlAsync(cupsPrinterId, pdfUrl, $"Ticket-{ticketId}", http);
+                var (success, message) = await _printer.PrintFromUrlAsync(cupsPrinterId, pdfUrl, $"Ticket-{ticketId}", http);
 
                 await ReportPrintResult(success, success ? $"Ticket {ticketId} sent to {cupsPrinterId}" : message);
             }
@@ -190,7 +190,7 @@ public class PrintWorker : BackgroundService
         {
             try
             {
-                var printers = await _cups.GetPrintersAsync();
+                var printers = await _printer.GetPrintersAsync();
                 await _connection!.InvokeAsync("PrinterListResponse", new
                 {
                     serviceId = _serviceId,
@@ -225,9 +225,9 @@ public class PrintWorker : BackgroundService
             {
                 // Create a simple test page
                 var testFile = Path.Combine(Path.GetTempPath(), $"testprint_{Guid.NewGuid():N}.txt");
-                await File.WriteAllTextAsync(testFile, $"Pi Print Service Test Page\n\nServiceId: {_serviceId}\nPrinter: {printerId}\nDate: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\nIf you can read this, printing is working!");
+                await File.WriteAllTextAsync(testFile, $"Web Print Service Test Page\n\nServiceId: {_serviceId}\nPrinter: {printerId}\nDate: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\nIf you can read this, printing is working!");
 
-                var (success, message) = await _cups.PrintFileAsync(printerId, testFile, "Test Page");
+                var (success, message) = await _printer.PrintFileAsync(printerId, testFile, "Test Page");
 
                 try { File.Delete(testFile); } catch { }
 
