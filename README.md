@@ -221,7 +221,7 @@ Options:
 |--------|---------|-------------|
 | `--service-id <id>` | `default` | Unique ID for this service instance |
 | `--port <port>` | `5230` | API/Swagger port |
-| `--branch <branch>` | `main` | Git branch to install |
+| `--branch <branch>` | `master` | Git branch to install |
 | `--install-dir <path>` | `/opt/web-print-service` | Install location |
 
 **What the script does automatically:**
