@@ -195,109 +195,86 @@ Uses CUPS command-line tools:
 
 ## Deployment
 
-### Automated Deploy to Raspberry Pi / Linux
+### One-Command Install on Raspberry Pi / Linux
 
-The `deploy/deploy-to-pi.sh` script handles everything: installs .NET, CUPS, builds, deploys, and registers as a systemd service.
+SSH into the Pi and run:
 
 ```bash
-# Basic usage
-./deploy/deploy-to-pi.sh 192.168.1.50 http://basicscale.scaledata.net
-
-# With options
-./deploy/deploy-to-pi.sh 192.168.1.50 http://basicscale.scaledata.net \
-    --user pi --service-id office --port 5230
-
-# Options:
-#   --user <username>       SSH user (default: pi)
-#   --service-id <id>       Unique ID for this service instance (default: default)
-#   --port <port>           API port on the Pi (default: 5230)
-#   --arch <arch>           Override architecture (linux-arm64, linux-arm, linux-x64)
-#   --branch <branch>       Git branch to deploy (default: main)
+curl -sSL https://raw.githubusercontent.com/GTMichelli-Dev/web-print-service/main/deploy/install.sh | bash -s -- http://basicscale.scaledata.net
 ```
 
-**Prerequisites:**
-- SSH key access to the Pi (`ssh-copy-id pi@192.168.1.50`)
-- Pi must have internet access
-- The script must be run from a machine with .NET SDK installed
+With options:
 
-**What the script does:**
-1. Tests SSH connection
-2. Detects Pi architecture (arm64, armv7l, x64)
-3. Installs CUPS on the Pi
-4. Installs .NET 8 ASP.NET Core runtime
-5. Cross-compiles the service for the Pi's architecture
-6. Deploys to `/opt/web-print-service`
-7. Configures and starts as a systemd service
+```bash
+curl -sSL https://raw.githubusercontent.com/GTMichelli-Dev/web-print-service/main/deploy/install.sh | bash -s -- \
+    http://basicscale.scaledata.net --service-id office --port 5230
+```
 
-**After deployment:**
-- Service URL: `http://<pi-ip>:5230`
+Options:
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--service-id <id>` | `default` | Unique ID for this service instance |
+| `--port <port>` | `5230` | API/Swagger port |
+| `--branch <branch>` | `main` | Git branch to install |
+| `--install-dir <path>` | `/opt/web-print-service` | Install location |
+
+**What the script does automatically:**
+1. Detects Pi architecture (arm64, armv7l, x64)
+2. Installs CUPS (printer system)
+3. Installs .NET 8 ASP.NET Core runtime
+4. Downloads latest source from GitHub
+5. Builds for the Pi's architecture
+6. Installs to `/opt/web-print-service`
+7. Preserves existing database on updates
+8. Registers and starts as a systemd service
+
+**Prerequisites:** Just internet access and `curl` (pre-installed on Raspberry Pi OS). No .NET, no CUPS — the script installs everything.
+
+**To update:** Run the same command again. The script stops the service, updates files, preserves your database, and restarts.
+
+**After install:**
 - Swagger: `http://<pi-ip>:5230/swagger`
-- CUPS admin: `http://<pi-ip>:631`
+- CUPS Admin: `http://<pi-ip>:631`
 - Logs: `sudo journalctl -u web-print-service -f`
+- Restart: `sudo systemctl restart web-print-service`
 
-### Automated Deploy to Windows
+### Install on Windows
 
-The `deploy/deploy-to-windows.ps1` script installs as a Windows Service with auto-restart on failure.
+**Option A — Automated (as a Windows Service):**
+
+Run PowerShell as Administrator:
 
 ```powershell
-# Run as Administrator
 .\deploy\deploy-to-windows.ps1 -WebServerUrl "http://basicscale.scaledata.net"
 
 # With options
-.\deploy\deploy-to-windows.ps1 -WebServerUrl "http://192.168.1.100:5110" `
-    -ServiceId "office" -Port 5230 -InstallDir "C:\Services\WebPrintService"
-
-# Parameters:
-#   -WebServerUrl <url>         (Required) BasicWeigh web server URL
-#   -ServiceId <id>             Unique ID for this instance (default: default)
-#   -Port <port>                API port (default: 5230)
-#   -InstallDir <path>          Install location (default: C:\Services\WebPrintService)
-#   -ServiceName <name>         Windows service name (default: WebPrintService)
-#   -ServiceDisplayName <name>  Display name in services.msc
+.\deploy\deploy-to-windows.ps1 -WebServerUrl "http://basicscale.scaledata.net" `
+    -ServiceId "office" -Port 5230
 ```
 
-**What the script does:**
-1. Checks for admin privileges
-2. Installs .NET 8 runtime if needed
-3. Stops existing service (if upgrading)
-4. Builds and publishes for win-x64
-5. Installs to `C:\Services\WebPrintService`
-6. Backs up and restores existing SQLite database
-7. Registers as a Windows Service with auto-restart
-8. Starts the service
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-WebServerUrl` | *(required)* | BasicWeigh web server URL |
+| `-ServiceId` | `default` | Unique ID for this instance |
+| `-Port` | `5230` | API/Swagger port |
+| `-InstallDir` | `C:\Services\WebPrintService` | Install location |
+| `-ServiceName` | `WebPrintService` | Windows service name |
 
-**After deployment:**
-- Service URL: `http://localhost:5230`
+**What the script does:** Installs .NET if needed, builds, installs to `C:\Services\WebPrintService`, preserves existing database, registers as a Windows Service with auto-restart on failure.
+
+**After install:**
 - Swagger: `http://localhost:5230/swagger`
 - Manage: `services.msc` > "Web Print Service"
-- Logs: `Get-EventLog -LogName Application -Source WebPrintService -Newest 20`
+- Restart: `Restart-Service WebPrintService`
 
-### Manual Setup on Windows (Development)
+**Option B — Manual (for development):**
 
 ```powershell
-# No additional setup needed — Windows printers are auto-detected
 cd WebPrintService
 dotnet run
 ```
 
-The service will automatically find all printers configured in Windows (Settings > Printers & Scanners).
-
-### Manual Setup on Raspberry Pi / Linux
-
-```bash
-# Install .NET 8 runtime
-curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 8.0 --runtime aspnetcore
-
-# Install CUPS
-sudo apt-get install cups
-sudo usermod -aG lpadmin $USER
-
-# Configure printers via CUPS web interface
-# https://localhost:631
-
-# Run the service
-dotnet run
-```
+Windows printers are auto-detected — no additional setup needed.
 
 ## Configuration
 
