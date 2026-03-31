@@ -12,10 +12,25 @@ Web App (BasicWeigh, etc.)
             |
             +-- Web Print Service (this)
                     |
-                    +-- Windows Print (PowerShell Get-Printer / Start-Process)
+                    +-- SumatraPDF (silent PDF printing)
                             |
                             +-- Physical Printer (USB, Network, Shared)
 ```
+
+#### Windows PDF Printing Requirements
+
+The service needs a silent PDF printing tool to send tickets to printers. It auto-detects in this order:
+
+1. **SumatraPDF** (recommended) — auto-installed via `winget` if not found
+2. **PDFtoPrinter.exe** — if placed in the service directory
+3. **Fallback** — uses `Start-Process -Verb PrintTo` (may open a dialog, not recommended for unattended use)
+
+To manually install SumatraPDF:
+```
+winget install SumatraPDF.SumatraPDF
+```
+
+Or download from https://www.sumatrapdfreader.org/free-pdf-reader
 
 ### Linux / macOS / Raspberry Pi
 ```

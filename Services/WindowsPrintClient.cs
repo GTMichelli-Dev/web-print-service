@@ -181,9 +181,36 @@ public class WindowsPrintClient : IPrintClient
                 : (false, $"SumatraPDF error: {output}");
         }
 
-        // Fallback: PowerShell + .NET PrintDocument (basic, may not format well)
+        // Try PDFtoPrinter (free command-line tool)
+        var pdfToPrinterPath = FindPdfToPrinter();
+        if (pdfToPrinterPath != null)
+        {
+            var (ec2, output2) = await RunCommandAsync(pdfToPrinterPath, $"\"{filePath}\" \"{printerId}\"");
+            return ec2 == 0
+                ? (true, $"Sent to {printerId} via PDFtoPrinter")
+                : (false, $"PDFtoPrinter error: {output2}");
+        }
+
+        // Try auto-installing SumatraPDF via winget
+        _log.LogWarning("No silent PDF printer found. Attempting to install SumatraPDF...");
+        var (installEc, installOut) = await RunCommandAsync("winget", "install --id SumatraPDF.SumatraPDF --accept-source-agreements --accept-package-agreements --silent");
+        if (installEc == 0)
+        {
+            var newPath = FindSumatraPdf();
+            if (newPath != null)
+            {
+                _log.LogInformation("SumatraPDF installed successfully.");
+                var (ec3, output3) = await RunCommandAsync(newPath, $"-print-to \"{printerId}\" -silent \"{filePath}\"");
+                return ec3 == 0
+                    ? (true, $"Sent to {printerId} via SumatraPDF")
+                    : (false, $"SumatraPDF error: {output3}");
+            }
+        }
+
+        // Last resort fallback: Start-Process with PrintTo verb (may open a dialog)
+        _log.LogWarning("Could not install SumatraPDF. Using fallback print method (may open dialog).");
         var (exitCode, result) = await RunPowerShellAsync(
-            $"Start-Process -FilePath \"{filePath}\" -Verb PrintTo -ArgumentList '\"{printerId}\"' -Wait");
+            $"Start-Process -FilePath \"{filePath}\" -Verb PrintTo -ArgumentList '\"{printerId}\"' -Wait -WindowStyle Hidden");
         return exitCode == 0
             ? (true, $"Sent to {printerId}")
             : (false, result);
@@ -199,16 +226,56 @@ public class WindowsPrintClient : IPrintClient
             : (false, output);
     }
 
-    private static string? FindSumatraPdf()
+    private static string? FindPdfToPrinter()
+    {
+        var paths = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "PDFtoPrinter.exe"),
+            @"C:\Program Files\PDFtoPrinter\PDFtoPrinter.exe",
+            @"C:\Program Files (x86)\PDFtoPrinter\PDFtoPrinter.exe",
+        };
+        return paths.FirstOrDefault(File.Exists);
+    }
+
+    private string? FindSumatraPdf()
     {
         var paths = new[]
         {
             @"C:\Program Files\SumatraPDF\SumatraPDF.exe",
             @"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"SumatraPDF\SumatraPDF.exe")
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"SumatraPDF\SumatraPDF.exe"),
+            // winget installs to various locations
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Microsoft\WinGet\Packages\SumatraPDF.SumatraPDF_Microsoft.Winget.Source_8wekyb3d8bbwe\SumatraPDF.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"SumatraPDF\SumatraPDF.exe"),
         };
 
-        return paths.FirstOrDefault(File.Exists);
+        var found = paths.FirstOrDefault(File.Exists);
+        if (found != null) return found;
+
+        // Try to find it via where command
+        try
+        {
+            var psi = new ProcessStartInfo("where", "SumatraPDF.exe")
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = Process.Start(psi);
+            if (proc != null)
+            {
+                var output = proc.StandardOutput.ReadLine();
+                proc.WaitForExit(3000);
+                if (!string.IsNullOrWhiteSpace(output) && File.Exists(output))
+                {
+                    _log.LogInformation("Found SumatraPDF at: {Path}", output);
+                    return output;
+                }
+            }
+        }
+        catch { }
+
+        return null;
     }
 
     private static async Task<(int exitCode, string output)> RunPowerShellAsync(string script)
