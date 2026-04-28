@@ -222,18 +222,16 @@ chmod +x "${INSTALL_DIR}/PiPrintService" 2>/dev/null || true
 # ---- Configure ----
 echo "[5/6] Configuring..."
 
-# Update appsettings.json
-if [ -f "${INSTALL_DIR}/appsettings.json" ] && command -v python3 &> /dev/null; then
-    python3 -c "
-import json
-with open('${INSTALL_DIR}/appsettings.json', 'r') as f:
-    config = json.load(f)
-config.setdefault('Print', {})
-config['Print']['ServerUrl'] = '${WEB_URL}'
-config['Print']['Port'] = '${SERVICE_PORT}'
-with open('${INSTALL_DIR}/appsettings.json', 'w') as f:
-    json.dump(config, f, indent=2)
-"
+# Update appsettings.json. ASP.NET's JSON config tolerates // comments, so we
+# can't assume json.load will parse it. Use sed for an in-place edit that
+# preserves comments and only touches the fields we own. '|' delimits s/// to
+# avoid escaping URL slashes; & | \ are escaped in the replacement value.
+if [ -f "${INSTALL_DIR}/appsettings.json" ]; then
+    ESCAPED_URL=$(printf '%s' "${WEB_URL}" | sed 's/[&|\\]/\\&/g')
+    sed -i "s|\"ServerUrl\"[[:space:]]*:[[:space:]]*\"[^\"]*\"|\"ServerUrl\": \"${ESCAPED_URL}\"|" \
+        "${INSTALL_DIR}/appsettings.json"
+    sed -i "s|\"Port\"[[:space:]]*:[[:space:]]*\"[^\"]*\"|\"Port\": \"${SERVICE_PORT}\"|" \
+        "${INSTALL_DIR}/appsettings.json"
     echo "  Updated appsettings.json"
 fi
 
