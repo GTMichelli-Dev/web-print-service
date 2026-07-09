@@ -60,6 +60,27 @@ Web App (BasicWeigh, etc.)
 
 ## Quick Start
 
+### Raspberry Pi install (recommended)
+
+The installer provisions everything: CUPS, the bundled BIXOLON POS CUPS
+driver, a queue named **TicketPrinter** for the USB **BIXOLON SRP-F310II**
+ticket printer (override with `--printer-name` / `--ppd`), the .NET runtime,
+and a systemd service. The SignalR ServiceId defaults to the Pi's hostname —
+give each print box a unique hostname before installing.
+
+```bash
+git clone https://github.com/GTMichelli-Dev/web-print-service.git /tmp/wps
+bash /tmp/wps/deploy/install.sh http://your-server:5110
+rm -rf /tmp/wps
+```
+
+Re-run the same command to update; settings survive. See
+`deploy/install.sh --help` for all options (`--printer-name`, `--service-id`,
+`--rotate`, `--media-size`, ...). After install, assign
+`<hostname>:TicketPrinter` on Foundation's Setup → Printers page.
+
+### Development
+
 ```bash
 # Windows
 cd WebPrintService
