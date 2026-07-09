@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.EntityFrameworkCore;
 using WebPrintService.Data;
 using WebPrintService.Services;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 
 namespace WebPrintService;
@@ -110,6 +112,12 @@ public class PrintWorker : BackgroundService
             await _connection.InvokeAsync("PrintServiceReady", new
             {
                 serviceId = _serviceId,
+                hostname = Environment.MachineName,
+                ipAddress = GetPrimaryIp(),
+                os = GetOsName(),
+                // Non-Windows printing goes through CUPS; its web admin lives
+                // on 631. The Printers page uses this to link into it.
+                cupsPort = OperatingSystem.IsWindows() ? (int?)null : 631,
                 printerCount = printers.Count,
                 printers = printers.Select(p => new
                 {
@@ -127,6 +135,29 @@ public class PrintWorker : BackgroundService
             _log.LogWarning("Failed to announce printers: {Msg}", ex.Message);
         }
     }
+
+    /// <summary>
+    /// The IP the web app (and an operator's browser) can reach this box on.
+    /// UDP connect doesn't send packets — it just makes the OS pick the
+    /// outbound interface/address for that destination.
+    /// </summary>
+    private static string? GetPrimaryIp()
+    {
+        try
+        {
+            using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, 0);
+            socket.Connect("8.8.8.8", 65530);
+            return (socket.LocalEndPoint as IPEndPoint)?.Address.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string GetOsName() =>
+        OperatingSystem.IsWindows() ? "Windows" :
+        OperatingSystem.IsMacOS() ? "macOS" : "Linux";
 
     private void RegisterHandlers()
     {
@@ -194,6 +225,10 @@ public class PrintWorker : BackgroundService
                 await _connection!.InvokeAsync("PrinterListResponse", new
                 {
                     serviceId = _serviceId,
+                    hostname = Environment.MachineName,
+                    ipAddress = GetPrimaryIp(),
+                    os = GetOsName(),
+                    cupsPort = OperatingSystem.IsWindows() ? (int?)null : 631,
                     printers = printers.Select(p => new
                     {
                         p.PrinterId,
