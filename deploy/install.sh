@@ -319,6 +319,33 @@ sudo cupsctl "ServerName=${CURRENT_HOSTNAME}" 2>/dev/null || \
 PI_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo "  CUPS running. Admin UI: http://${PI_IP:-localhost}:631"
 
+# Open firewall ports for the service API/Swagger and the CUPS web admin
+# (Pi OS ships with no firewall, but a site-hardened image may have ufw or
+# iptables rules that would block them)
+if command -v ufw &> /dev/null && sudo ufw status | grep -q "active"; then
+    sudo ufw allow 22/tcp > /dev/null
+    sudo ufw allow "${SERVICE_PORT}"/tcp > /dev/null
+    sudo ufw allow 631/tcp > /dev/null
+    echo "  Firewall: ufw — ports 22, ${SERVICE_PORT}, 631 opened."
+fi
+
+if command -v iptables &> /dev/null; then
+    for fw_port in "${SERVICE_PORT}" 631; do
+        sudo iptables -C INPUT -p tcp --dport "$fw_port" -j ACCEPT 2>/dev/null || \
+            sudo iptables -I INPUT -p tcp --dport "$fw_port" -j ACCEPT
+    done
+    echo "  Firewall: iptables — ports ${SERVICE_PORT} and 631 opened."
+
+    # Persist iptables rules across reboots
+    if command -v netfilter-persistent &> /dev/null; then
+        sudo netfilter-persistent save 2>/dev/null || true
+    elif command -v iptables-save &> /dev/null; then
+        sudo mkdir -p /etc/iptables
+        sudo sh -c 'iptables-save > /etc/iptables/rules.v4' 2>/dev/null || true
+    fi
+    echo "  Firewall: rules saved for reboot persistence."
+fi
+
 # ---- Install bundled BIXOLON POS CUPS driver pack ----
 # Looks for deploy/drivers/bixolon-cups/Software_BxlPOSCupsDrv_Linux_*.tgz
 # inside the script's checkout. Skips if the SRP-F310II PPD is already there.
