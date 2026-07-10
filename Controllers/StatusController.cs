@@ -65,9 +65,20 @@ public class StatusController : ControllerBase
     [HttpPost("api/printers/{printerId}/test")]
     public async Task<IActionResult> TestPrint(string printerId)
     {
-        var testFile = Path.Combine(Path.GetTempPath(), $"testprint_{Guid.NewGuid():N}.txt");
-        await System.IO.File.WriteAllTextAsync(testFile,
-            $"Print Service Test Page\n\nPrinter: {printerId}\nDate: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\nPlatform: {(OperatingSystem.IsWindows() ? "Windows" : "Linux/macOS")}\n\nIf you can read this, printing is working!");
+        // PDF, not plain text — same rationale as PrintWorker's TestPrint:
+        // text goes through the CUPS text filter, which overprints on the
+        // BIXOLON raster path; PDFs take the real ticket pipeline.
+        var testFile = Path.Combine(Path.GetTempPath(), $"testprint_{Guid.NewGuid():N}.pdf");
+        await System.IO.File.WriteAllBytesAsync(testFile, TestPagePdf.Build(new[]
+        {
+            "Print Service Test Page",
+            "",
+            $"Printer: {printerId}",
+            $"Date: {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
+            $"Platform: {(OperatingSystem.IsWindows() ? "Windows" : "Linux/macOS")}",
+            "",
+            "Printing is working!"
+        }));
 
         var (success, message) = await _printer.PrintFileAsync(printerId, testFile, "Test Page");
 

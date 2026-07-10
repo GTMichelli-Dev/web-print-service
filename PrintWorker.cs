@@ -258,9 +258,20 @@ public class PrintWorker : BackgroundService
             _log.LogInformation("Received TestPrint for printer: {Printer}", printerId);
             try
             {
-                // Create a simple test page
-                var testFile = Path.Combine(Path.GetTempPath(), $"testprint_{Guid.NewGuid():N}.txt");
-                await File.WriteAllTextAsync(testFile, $"Web Print Service Test Page\n\nServiceId: {_serviceId}\nPrinter: {printerId}\nDate: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\nIf you can read this, printing is working!");
+                // Test page as a PDF so it takes the same path real tickets do
+                // (plain text goes through the CUPS text filter, which the
+                // BIXOLON raster path overprints on receipt stock).
+                var testFile = Path.Combine(Path.GetTempPath(), $"testprint_{Guid.NewGuid():N}.pdf");
+                await File.WriteAllBytesAsync(testFile, TestPagePdf.Build(new[]
+                {
+                    "Print Service Test Page",
+                    "",
+                    $"ServiceId: {_serviceId}",
+                    $"Printer: {printerId}",
+                    $"Date: {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
+                    "",
+                    "Printing is working!"
+                }));
 
                 var (success, message) = await _printer.PrintFileAsync(printerId, testFile, "Test Page");
 
