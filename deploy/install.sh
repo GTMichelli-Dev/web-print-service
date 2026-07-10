@@ -50,10 +50,11 @@ PPD_OVERRIDE=""         # optional PPD file path override; defaults to the bundl
 # option, generic filters honor the IPP one.
 ROTATION_DEFAULT="0"
 # BIXOLON PPD PageSize value — opaque indexed names from the PPD. Default is
-# "75X72MMY2000MM" = 72mm print width × 2000mm continuous strip, right for
-# variable-length tickets on 80mm receipt paper. Inspect alternates with:
+# "74X72MMY200MM" = 72mm print width x 200mm receipt. (Do NOT use the 2000mm
+# continuous-strip sizes for fixed-page ticket PDFs — CUPS scales the page to
+# fill the strip and prints a 3-foot banner.) Inspect alternates with:
 #   lpoptions -p TicketPrinter -l | grep -i pagesize
-MEDIA_SIZE="75X72MMY2000MM"
+MEDIA_SIZE="74X72MMY200MM"
 FORCE_HOSTNAME=""       # set with --force-hostname to skip the generic-hostname check
 
 # ---- Parse arguments ----
@@ -91,7 +92,7 @@ Options:
                           IPP orientation-requested-default fallback.
                           (default: 0 — SRP-F310II receipts print portrait)
   --media-size <ppd-val>  BIXOLON PPD PageSize value for the queue. Default is
-                          "75X72MMY2000MM" (72mm x 2000mm continuous strip).
+                          "74X72MMY200MM" (72mm x 200mm receipt).
                           List alternates on the Pi with:
                               lpoptions -p TicketPrinter -l | grep -i pagesize
   --force-hostname        Skip the check that warns about generic hostnames
