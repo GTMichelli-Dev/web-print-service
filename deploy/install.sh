@@ -578,6 +578,7 @@ sudo lpadmin -p "$PRINTER_NAME" \
     -o "Rotation=${PPD_ROTATION}" \
     -o "orientation-requested-default=${IPP_ORIENTATION}" \
     -o "PageSize=${MEDIA_SIZE}" \
+    -o "fit-to-page=true" \
     -L "Scale house: ${CURRENT_HOSTNAME}" \
     -D "${PRINTER_NAME} on ${CURRENT_HOSTNAME}"
 echo "  Default rotation: ${ROTATION_LABEL}."
