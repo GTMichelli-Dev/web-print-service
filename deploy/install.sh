@@ -169,6 +169,23 @@ while true; do
     WEB_URL="$new_url"
 done
 
+# ---- Upgrade http:// -> https:// when the server redirects ----
+# Sites deployed behind the Foundation nginx config answer :80 with a blanket
+# 301 to https. SignalR's negotiate is a POST, and every standard HTTP client
+# (including the .NET one this service uses) downgrades POST to GET when it
+# follows a 301 — the hub then answers 405 and the service never connects.
+# The reachability check above is happy with a 301, so catch it here instead.
+if [[ "$WEB_URL" == http://* ]]; then
+    redirect_target=$(curl -s -o /dev/null --max-time 5 --connect-timeout 5 \
+        -w "%{redirect_url}" "$WEB_URL" 2>/dev/null) || true
+    if [[ "$redirect_target" == https://* ]]; then
+        WEB_URL="https://${WEB_URL#http://}"
+        WEB_URL="${WEB_URL%/}"
+        echo "  Server redirects to HTTPS — using ${WEB_URL} instead."
+        echo "  (SignalR cannot negotiate through an http->https redirect.)"
+    fi
+fi
+
 # Prompt for the printer queue name if not provided via --printer-name.
 # Default to TicketPrinter; operator can hit Enter to accept.
 if [ -z "$PRINTER_NAME" ]; then
@@ -668,6 +685,21 @@ else
     echo "    curl -X PUT http://localhost:${SERVICE_PORT}/api/settings \\"
     echo "      -H 'Content-Type: application/json' \\"
     echo "      -d '{\"serviceId\": \"${SERVICE_ID}\", \"serverUrl\": \"${WEB_URL}\"}'"
+fi
+
+# ---- Verify the SignalR hub actually accepts a connection ----
+# Without this the install reports success even when the service can never
+# reach the hub, and the failure only shows up as an empty Printers page.
+# negotiate is a POST; anything other than 200 means the service won't connect.
+NEGOTIATE_CODE=$(curl -s -o /dev/null --max-time 10 --connect-timeout 5 \
+    -X POST "${WEB_URL}/scaleHub/negotiate?negotiateVersion=1" \
+    -w '%{http_code}' 2>/dev/null) || true
+if [ "$NEGOTIATE_CODE" = "200" ]; then
+    echo "  SignalR hub reachable at ${WEB_URL}/scaleHub."
+else
+    echo "  WARNING: SignalR hub at ${WEB_URL}/scaleHub returned ${NEGOTIATE_CODE:-no response}."
+    echo "  This box will NOT appear on the Foundation Printers page until that is fixed."
+    echo "  Check the URL scheme (https for deployed sites), the host, and the port."
 fi
 
 echo ""
