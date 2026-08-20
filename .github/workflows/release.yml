@@ -1,0 +1,80 @@
+name: Release
+
+# Publishes prebuilt, self-contained binaries so a target machine needs no
+# .NET, no SDK and no git.
+#
+#   git tag v1.0.1 && git push origin v1.0.1
+#
+# The installer inside each package finds the "app" folder beside it and skips
+# its own build step.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, without the leading v"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build packages
+        run: |
+          set -euo pipefail
+          for RID in linux-arm64 linux-x64 win-x64; do
+            dotnet publish PiPrintService.csproj -c Release -r "$RID" --self-contained true               -o "out/$RID/app" -p:PublishSingleFile=false
+            # Ship the repo's own installer alongside, when it has one.
+            for f in deploy/install.sh deploy/install.ps1; do
+              [ -f "$f" ] && cp "$f" "out/$RID/"
+            done
+            chmod +x "out/$RID/app/PiPrintService" 2>/dev/null || true
+            chmod +x "out/$RID/install.sh" 2>/dev/null || true
+            case "$RID" in
+              win-*) (cd "out/$RID" && zip -qr "../../web-print-service-$RID.zip" .) ;;
+              *)     tar -czf "web-print-service-$RID.tar.gz" -C "out/$RID" . ;;
+            esac
+          done
+          ls -lh web-print-service-*
+
+      - name: Check the packages
+        run: |
+          set -euo pipefail
+          # A database must never ship - it would overwrite the site's own data.
+          if find out \( -name "*.db" -o -name "*.db-wal" -o -name "*.db-shm" \) | grep -q .; then
+            echo "::error::A database file leaked into a package."
+            exit 1
+          fi
+          for RID in linux-arm64 linux-x64 win-x64; do
+            case "$RID" in
+              win-*) test -f "out/$RID/app/PiPrintService.exe" || { echo "::error::missing $RID exe"; exit 1; } ;;
+              *)     test -f "out/$RID/app/PiPrintService"     || { echo "::error::missing $RID binary"; exit 1; } ;;
+            esac
+          done
+          echo "Packages OK"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          gh release create "v$V" --title "v$V"             --notes "Prebuilt, self-contained builds. No .NET, no SDK and no git needed on the target machine. Extract the archive for your platform and run the installer inside it - see the README for the exact command."             web-print-service-*

@@ -260,6 +260,19 @@ echo ""
 
 # ---- Detect architecture ----
 echo "[1/7] Detecting system..."
+# Prebuilt release package?
+#
+# An "app" folder beside this script - the layout of the release tarball - means
+# the binaries are already built for this architecture, so the SDK download and
+# the build are both skipped. Without it, the script clones and builds as before.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PREBUILT_DIR="${SCRIPT_DIR}/app"
+if [ -d "${PREBUILT_DIR}" ] && [ -f "${PREBUILT_DIR}/PiPrintService" ]; then
+    PREBUILT=true
+else
+    PREBUILT=false
+fi
+
 ARCH=$(uname -m)
 case "$ARCH" in
     aarch64) RID="linux-arm64" ;;
@@ -482,6 +495,10 @@ else
 fi
 
 echo "  Building..."
+if [ "$PREBUILT" = true ]; then
+    echo "  Using prebuilt binaries (no build needed)."
+    cp -r "${PREBUILT_DIR}/." "${INSTALL_DIR}/"
+else
 dotnet publish "${BUILD_DIR}/PiPrintService.csproj" \
     -c Release \
     -r "${RID}" \
@@ -489,6 +506,7 @@ dotnet publish "${BUILD_DIR}/PiPrintService.csproj" \
     -o "${INSTALL_DIR}" \
     -p:PublishSingleFile=false \
     -p:PublishTrimmed=false
+fi
 
 [ -n "${CLONE_DIR}" ] && rm -rf "${CLONE_DIR}"
 
