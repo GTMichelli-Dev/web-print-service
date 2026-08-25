@@ -414,7 +414,7 @@ else
     echo "  PDFs will not render unless --ppd points to a valid PPD."
 fi
 
-# ---- Install .NET 8 ----
+# ---- Install .NET ----
 echo "[3/7] Installing .NET runtime..."
 DOTNET_ROOT="$HOME/.dotnet"
 

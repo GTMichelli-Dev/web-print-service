@@ -1,6 +1,6 @@
 # Web Print Service
 
-A cross-platform .NET 8.0 print service that connects to a web application via SignalR and provides remote printing. Automatically detects the operating system and uses **Windows Print** (PowerShell/WMI) on Windows or **CUPS** (`lpstat`, `lp`) on Linux/macOS.
+A cross-platform .NET 10 print service that connects to a web application via SignalR and provides remote printing. Automatically detects the operating system and uses **Windows Print** (PowerShell/WMI) on Windows or **CUPS** (`lpstat`, `lp`) on Linux/macOS.
 
 ## Architecture
 
@@ -78,6 +78,21 @@ Re-run the same command to update; settings survive. See
 `deploy/install.sh --help` for all options (`--printer-name`, `--service-id`,
 `--rotate`, `--media-size`, ...). After install, assign
 `<hostname>:TicketPrinter` on Foundation's Setup → Printers page.
+
+### Windows install
+
+Download `web-print-service-win-x64.zip` from
+[Releases](https://github.com/GTMichelli-Dev/web-print-service/releases), unzip
+it on the PC the printer is attached to, and from an **admin** prompt in that
+folder:
+
+```powershell
+INSTALL.bat https://your-server
+```
+
+Self-contained — no .NET, no SDK and no git needed on that PC. Full option set
+and the printing gotchas that bite on Windows are in
+[Install on Windows](#install-on-windows).
 
 ### Development
 
@@ -263,7 +278,7 @@ Options:
 **What the script does automatically:**
 1. Detects Pi architecture (arm64, armv7l, x64)
 2. Installs CUPS (printer system)
-3. Installs .NET 8 SDK and runtime permanently (skips download on future updates)
+3. Installs the .NET 10 SDK and runtime permanently (skips download on future updates)
 4. Downloads latest source from GitHub
 5. Builds for the Pi's architecture
 6. Installs to `/opt/web-print-service`
@@ -282,41 +297,127 @@ Options:
 
 ### Install on Windows
 
-**Option A — Automated (as a Windows Service):**
+`deploy/install.ps1` is the Windows counterpart to `install.sh`, with
+`deploy/INSTALL.bat` as a double-clickable wrapper so nobody has to touch the
+machine's execution policy.
 
-Run PowerShell as Administrator:
+**Get the package.** Every tagged release ships a prebuilt, self-contained
+`web-print-service-win-x64.zip` — the .NET runtime is bundled, so the target PC
+needs no .NET, no SDK and no git. Download it from
+[Releases](https://github.com/GTMichelli-Dev/web-print-service/releases) and
+unzip it on the PC the printer is attached to.
+
+To build the same package by hand — publish into an `app` folder next to the
+scripts:
 
 ```powershell
-.\deploy\deploy-to-windows.ps1 -WebServerUrl "https://basicscale.scaledata.net"
-
-# With options
-.\deploy\deploy-to-windows.ps1 -WebServerUrl "https://basicscale.scaledata.net" `
-    -ServiceId "office" -Port 5230
+dotnet publish PiPrintService.csproj -c Release -r win-x64 --self-contained true -o C:\Temp\web-print\app
+copy deploy\install.ps1          C:\Temp\web-print\
+copy deploy\INSTALL.bat          C:\Temp\web-print\
+copy deploy\package-README.txt   C:\Temp\web-print\README.txt
 ```
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `-WebServerUrl` | *(required)* | BasicWeigh web server URL |
-| `-ServiceId` | `default` | Unique ID for this instance |
-| `-Port` | `5230` | API/Swagger port |
-| `-InstallDir` | `C:\Services\WebPrintService` | Install location |
-| `-ServiceName` | `WebPrintService` | Windows service name |
-
-**What the script does:** Installs .NET if needed, builds, installs to `C:\Services\WebPrintService`, preserves existing database, registers as a Windows Service with auto-restart on failure.
-
-**After install:**
-- Swagger: `http://localhost:5230/swagger`
-- Manage: `services.msc` > "Web Print Service"
-- Restart: `Restart-Service WebPrintService`
-
-**Option B — Manual (for development):**
+**Install.** From an **admin** prompt in that folder:
 
 ```powershell
-cd WebPrintService
+INSTALL.bat https://basicscale.scaledata.net
+```
+
+Or drive the script directly for the full option set:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1 -WebUrl https://basicscale.scaledata.net -ServiceId scalehouse
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-WebUrl` | *(required)* | Base URL of the web app. Must match its real scheme and port. |
+| `-ServiceId` | computer name | Names this PC on the web app's Printers page. |
+| `-Port` | `5230` | Local Swagger / diagnostic API port. |
+| `-InstallDir` | `C:\Services\WebPrintService` | Install location. |
+| `-ServiceName` | `WebPrintService` | Windows service name. |
+| `-TestPrinter` | *(none)* | Print a test page to this printer at the end. |
+| `-ResetDb` | off | Start from a clean database. **Destroys** the ServiceId, ServerUrl and printer settings — a timestamped backup is taken first regardless. |
+| `-SkipUrlCheck` | off | Install even if the SignalR hub probe fails. |
+| `-SkipPdfTool` | off | Don't try to install SumatraPDF when none is found. |
+
+The script is idempotent — re-run it to update. It will:
+
+1. Validate the arguments, find the binaries, and probe the web app's
+   **SignalR hub** — a redirect or a 404 is reported before anything is
+   installed, since either leaves the service reconnecting forever. (Negotiate
+   is a POST; an `http`→`https` redirect downgrades it to GET and the hub
+   answers 405 for good.)
+2. Stop the service and **wait for it to actually stop** (it holds its own
+   `.exe`; copying too early fails with a file lock), plus stop any copy left
+   running from a console.
+3. Back up the database to the Desktop, timestamped.
+4. Copy the binaries, excluding the database and its `-wal`/`-shm` companions.
+5. Write `ServerUrl` and the listen port into `appsettings.json`.
+6. Check that a silent PDF printer is installed **for all users**, installing
+   SumatraPDF via `winget --scope machine` if not — see
+   [Silent PDF printing](#silent-pdf-printing).
+7. Create the service if missing — **automatic startup**, and configured to
+   restart itself on failure (5s, 15s, then every 60s), since a scale-house PC
+   is rarely watched. An existing service has its path corrected and startup
+   set to automatic.
+8. Start it, poll `/api/status/health` until it answers, and list the printers
+   the service can see — failing loudly rather than reporting success over a
+   dead service.
+9. Apply `ServiceId` and `ServerUrl` **through the API**, then read them back.
+
+Step 9 matters: `appsettings.json` only seeds the database on the first run, so
+on a machine that has been running for months, editing the config file alone
+would change nothing.
+
+**Manage it afterwards:**
+
+```powershell
+Get-Service WebPrintService
+Restart-Service WebPrintService
+Invoke-RestMethod http://localhost:5230/api/printers
+```
+
+#### Silent PDF printing
+
+Tickets are PDFs, and printing one without a dialog needs a helper. The service
+looks for `PDFtoPrinter.exe` in its install folder, then
+`C:\Program Files\PDFtoPrinter\PDFtoPrinter.exe`, then
+`C:\Program Files\SumatraPDF\SumatraPDF.exe`. Without one it falls back to
+`Start-Process -Verb PrintTo`, which wants a desktop — under a service account
+there isn't one, so tickets quietly never come out.
+
+**All-users installs only.** The service runs as LocalSystem, whose
+`LocalAppData` is `C:\Windows\System32\config\systemprofile\AppData\Local`, so
+an ordinary `winget install SumatraPDF.SumatraPDF` — which installs per-user —
+is invisible to it. It then works perfectly when you double-click a PDF and not
+at all from the service. The installer asks for `--scope machine` for exactly
+this reason, and says so when that fails.
+
+Fixing it later needs no reinstall: drop `PDFtoPrinter.exe` into the install
+folder, or install SumatraPDF for all users, and the next print finds it.
+
+**Printers follow the same rule.** A printer added while logged in as yourself
+— including a shared `\\server\printer` — belongs to your profile and is
+invisible to LocalSystem. Either add it for all users, or point the service at
+that account in `services.msc` → **WebPrintService** → **Log On**. The
+installer prints the list of printers it can actually see; an empty list, or
+one missing the ticket printer, is this.
+
+**Run it in the foreground** — for development, or to see an error the service swallows:
+
+```powershell
+cd PiPrintService
 dotnet run
 ```
 
-Windows printers are auto-detected — no additional setup needed.
+Or, on a machine where it is already installed:
+
+```powershell
+net stop WebPrintService
+"C:\Services\WebPrintService\PiPrintService.exe"
+```
+
 
 ## Configuration
 

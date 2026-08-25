@@ -47,6 +47,15 @@ jobs:
             for f in deploy/install.sh deploy/install.ps1; do
               [ -f "$f" ] && cp "$f" "out/$RID/"
             done
+            # The Windows package also carries the double-clickable wrapper and
+            # its own README, so an operator can unzip it on a customer PC and
+            # read what to do without going back to GitHub.
+            case "$RID" in
+              win-*)
+                cp deploy/INSTALL.bat "out/$RID/"
+                cp deploy/package-README.txt "out/$RID/README.txt"
+                ;;
+            esac
             chmod +x "out/$RID/app/PiPrintService" 2>/dev/null || true
             chmod +x "out/$RID/install.sh" 2>/dev/null || true
             case "$RID" in
@@ -66,8 +75,13 @@ jobs:
           fi
           for RID in linux-arm64 linux-x64 win-x64; do
             case "$RID" in
-              win-*) test -f "out/$RID/app/PiPrintService.exe" || { echo "::error::missing $RID exe"; exit 1; } ;;
-              *)     test -f "out/$RID/app/PiPrintService"     || { echo "::error::missing $RID binary"; exit 1; } ;;
+              win-*) test -f "out/$RID/app/PiPrintService.exe" || { echo "::error::missing $RID exe"; exit 1; }
+                     # A package with no installer in it is worse than a failed
+                     # build: it looks complete right up to the customer PC.
+                     test -f "out/$RID/install.ps1"           || { echo "::error::missing $RID installer"; exit 1; }
+                     test -f "out/$RID/INSTALL.bat"           || { echo "::error::missing $RID wrapper"; exit 1; } ;;
+              *)     test -f "out/$RID/app/PiPrintService"     || { echo "::error::missing $RID binary"; exit 1; }
+                     test -f "out/$RID/install.sh"            || { echo "::error::missing $RID installer"; exit 1; } ;;
             esac
           done
           echo "Packages OK"
