@@ -5,6 +5,16 @@ using WebPrintService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Windows Service support. Without it the Service Control Manager starts the
+// process, waits for a service-control handler that never registers, and kills
+// it after 30s with "Error 1053: the service did not respond in time" — while
+// running the same .exe from a console works perfectly. No-op elsewhere, so the
+// Pi and macOS builds are unaffected.
+builder.Services.AddWindowsService(options =>
+{
+    options.ServiceName = "Web Print Service";
+});
+
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -13,9 +23,13 @@ builder.Services.AddSwaggerGen(c =>
 });
 builder.Services.AddControllers();
 
-// SQLite
+// SQLite — beside the binaries, not in the working directory. A Windows service
+// starts in C:\Windows\System32, so a relative path would put the settings
+// database there, and running the same install by hand would silently use a
+// different one.
+var dbPath = Path.Combine(AppContext.BaseDirectory, "webprintservice.db");
 builder.Services.AddDbContext<PrintDbContext>(opt =>
-    opt.UseSqlite("Data Source=webprintservice.db"));
+    opt.UseSqlite($"Data Source={dbPath}"));
 
 // Services — register the right print client based on OS
 if (OperatingSystem.IsWindows())
