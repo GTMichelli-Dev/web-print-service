@@ -47,9 +47,10 @@ WHAT IT DOES
  3. Backs up the database to the Desktop, timestamped.
  4. Copies the new binaries, leaving the database alone.
  5. Writes the web app URL and the API port into appsettings.json.
- 6. Checks that a silent PDF printer is installed FOR ALL USERS, and installs
-    SumatraPDF via winget if not. See PRINTING below - this is the step that
-    decides whether tickets actually come out.
+ 6. Checks that a silent PDF printer the service account can read is present,
+    and downloads the portable SumatraPDF.exe into <install dir>\tools if not.
+    See PRINTING below - this is the step that decides whether tickets actually
+    come out.
  7. Creates the service if missing, with AUTOMATIC STARTUP and set to restart
     on failure (5s, 15s, then every 60s). An existing service has its path
     corrected and startup set to automatic.
@@ -68,18 +69,27 @@ PRINTING
 Tickets are PDFs, and printing one without a dialog needs a helper tool. The
 service looks for, in order:
 
+    tools\SumatraPDF.exe in the install folder   (staged by this installer)
     PDFtoPrinter.exe in the install folder
     C:\Program Files\PDFtoPrinter\PDFtoPrinter.exe
     C:\Program Files\SumatraPDF\SumatraPDF.exe
 
-ALL-USERS INSTALLS ONLY. The service runs as LocalSystem, and a normal
-"winget install SumatraPDF" puts it in the installing admin's own profile,
-where LocalSystem cannot see it. It then works perfectly when you double-click
-a PDF and not at all from the service. The installer asks winget for
---scope machine for this reason; if that fails it says so.
+NO WINGET. Step 6 downloads the 64-bit PORTABLE SumatraPDF.exe over HTTPS into
+<install dir>\tools. winget is not used because many PCs do not have it at all
+(Server LTSC, or any machine without the Store's App Installer), and where it
+does exist "winget install SumatraPDF" puts the exe in the installing admin's
+own profile, where LocalSystem cannot see it - it then works perfectly when you
+double-click a PDF and not at all from the service.
 
-Fixing it later needs no reinstall - drop PDFtoPrinter.exe into the install
-folder, or install SumatraPDF for all users, and the next print finds it.
+If the PC has no internet, or a proxy blocks the download, the installer warns
+and carries on. Fixing it later needs no reinstall - download the 64-bit
+portable build from
+
+    https://www.sumatrapdfreader.org/download-free-pdf-viewer
+
+and copy it to <install dir>\tools\SumatraPDF.exe (or drop PDFtoPrinter.exe
+into the install folder), and the next print finds it. Re-running the installer
+does not wipe the tools folder.
 
 The printers themselves have the same rule. A printer added under one user's
 profile - which is what happens when you add a shared \\server\printer while

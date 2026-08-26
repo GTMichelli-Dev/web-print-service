@@ -174,7 +174,15 @@ public class WindowsPrintClient : IPrintClient
         var sumatraPath = FindSumatraPdf();
         if (sumatraPath != null)
         {
-            var args = $"-print-to \"{printerId}\" -silent \"{filePath}\"";
+            // -print-settings "disable-auto-rotation": by default SumatraPDF rotates
+            // the page 90 degrees to match the printer's default paper orientation.
+            // That turns portrait tickets and labels landscape on any PC whose
+            // printer default is landscape - while a PC WITHOUT SumatraPDF (using
+            // the shell fallback) prints the same file portrait, so two scale houses
+            // disagree on identical input. Printing in the authored orientation makes
+            // every PC consistent. Changing the printer's orientation by hand does not
+            // fix it: this is content rotation, not paper orientation.
+            var args = $"-print-to \"{printerId}\" -print-settings \"disable-auto-rotation\" -silent \"{filePath}\"";
             var (ec, output) = await RunCommandAsync(sumatraPath, args);
             return ec == 0
                 ? (true, $"Sent to {printerId} via SumatraPDF")
@@ -191,24 +199,17 @@ public class WindowsPrintClient : IPrintClient
                 : (false, $"PDFtoPrinter error: {output2}");
         }
 
-        // Try auto-installing SumatraPDF via winget
-        _log.LogWarning("No silent PDF printer found. Attempting to install SumatraPDF...");
-        var (installEc, installOut) = await RunCommandAsync("winget", "install --id SumatraPDF.SumatraPDF --accept-source-agreements --accept-package-agreements --silent");
-        if (installEc == 0)
-        {
-            var newPath = FindSumatraPdf();
-            if (newPath != null)
-            {
-                _log.LogInformation("SumatraPDF installed successfully.");
-                var (ec3, output3) = await RunCommandAsync(newPath, $"-print-to \"{printerId}\" -silent \"{filePath}\"");
-                return ec3 == 0
-                    ? (true, $"Sent to {printerId} via SumatraPDF")
-                    : (false, $"SumatraPDF error: {output3}");
-            }
-        }
+        // No winget fallback here on purpose. winget is absent on Server LTSC
+        // and on plenty of scale-house PCs, and under the LocalSystem service
+        // account it either is not on PATH ("cannot find the file specified")
+        // or installs per-user into a profile this service cannot read - so the
+        // attempt only ever delayed the real error. deploy/install.ps1 stages
+        // the portable exe into <install dir>\tools instead, so reaching this
+        // point means that step was skipped or its download was blocked.
+        _log.LogWarning(@"No silent PDF printer found. Re-run deploy\install.ps1 to provision SumatraPDF (tools\SumatraPDF.exe), or drop PDFtoPrinter.exe in the install folder.");
 
         // Last resort fallback: Start-Process with PrintTo verb (may open a dialog)
-        _log.LogWarning("Could not install SumatraPDF. Using fallback print method (may open dialog).");
+        _log.LogWarning("Using fallback print method - it wants a desktop, so it does nothing under a service account.");
         var (exitCode, result) = await RunPowerShellAsync(
             $"Start-Process -FilePath \"{filePath}\" -Verb PrintTo -ArgumentList '\"{printerId}\"' -Wait -WindowStyle Hidden");
         return exitCode == 0
@@ -241,6 +242,10 @@ public class WindowsPrintClient : IPrintClient
     {
         var paths = new[]
         {
+            // Staged by deploy/install.ps1 - checked first, and the location
+            // the LocalSystem service account is certain to be able to read.
+            Path.Combine(AppContext.BaseDirectory, "tools", "SumatraPDF.exe"),
+            Path.Combine(AppContext.BaseDirectory, "SumatraPDF.exe"),
             @"C:\Program Files\SumatraPDF\SumatraPDF.exe",
             @"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe",
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"SumatraPDF\SumatraPDF.exe"),

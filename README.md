@@ -21,16 +21,29 @@ Web App (BasicWeigh, etc.)
 
 The service needs a silent PDF printing tool to send tickets to printers. It auto-detects in this order:
 
-1. **SumatraPDF** (recommended) — auto-installed via `winget` if not found
+1. **SumatraPDF** (recommended) — `deploy\install.ps1` downloads the portable
+   `SumatraPDF.exe` into `<install dir>\tools\` if none is already present
 2. **PDFtoPrinter.exe** — if placed in the service directory
-3. **Fallback** — uses `Start-Process -Verb PrintTo` (may open a dialog, not recommended for unattended use)
+3. **Fallback** — uses `Start-Process -Verb PrintTo` (may open a dialog, and does
+   nothing at all under a service account)
 
-To manually install SumatraPDF:
-```
-winget install SumatraPDF.SumatraPDF
-```
+To provision it by hand — on a PC with no internet, or where a proxy blocked the
+installer's download — grab the **64-bit portable** build from
+https://www.sumatrapdfreader.org/download-free-pdf-viewer and copy it to
+`C:\Services\WebPrintService\tools\SumatraPDF.exe`. No installer needed, and
+the next print picks it up.
 
-Or download from https://www.sumatrapdfreader.org/free-pdf-reader
+`winget` is deliberately *not* used: it is absent on Server LTSC and on plenty of
+stock Windows builds, and its default per-user install lands where the LocalSystem
+service account cannot read it.
+
+**Orientation.** SumatraPDF is invoked with
+`-print-settings "disable-auto-rotation"`. Left to itself it rotates the page 90
+degrees to match the printer's *default* paper orientation, which turns portrait
+tickets landscape on any PC whose printer defaults that way — while a PC using the
+shell fallback prints the same file portrait. Forcing the authored orientation
+makes every PC agree. Changing the printer's orientation in Windows does not fix
+it: this is content rotation, not paper orientation.
 
 ### Linux / macOS / Raspberry Pi
 ```
@@ -232,10 +245,12 @@ Update service settings. Triggers a reconnect to the web app.
 ### Windows
 Uses PowerShell commands:
 - `Get-Printer` — enumerate all local and network printers
-- `Start-Process -Verb PrintTo` — print PDFs (or SumatraPDF if installed)
+- `SumatraPDF -print-to <printer> -print-settings "disable-auto-rotation" -silent`
+  — print PDFs, staged into `<install dir>\tools\` by `deploy/install.ps1`
+- `Start-Process -Verb PrintTo` — PDF fallback when no silent printer is present
+  (wants a desktop, so it does nothing under a service account)
 - `Out-Printer` — print text files
 - `rundll32 shimgvw.dll` — print images
-- Optional: [SumatraPDF](https://www.sumatrapdfreader.org/) for better PDF printing
 
 ### Linux / macOS (CUPS)
 Uses CUPS command-line tools:
@@ -339,7 +354,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -WebUrl https://basicscale.
 | `-TestPrinter` | *(none)* | Print a test page to this printer at the end. |
 | `-ResetDb` | off | Start from a clean database. **Destroys** the ServiceId, ServerUrl and printer settings — a timestamped backup is taken first regardless. |
 | `-SkipUrlCheck` | off | Install even if the SignalR hub probe fails. |
-| `-SkipPdfTool` | off | Don't try to install SumatraPDF when none is found. |
+| `-SkipPdfTool` | off | Don't download SumatraPDF when none is found. |
 
 The script is idempotent — re-run it to update. It will:
 
@@ -354,9 +369,9 @@ The script is idempotent — re-run it to update. It will:
 3. Back up the database to the Desktop, timestamped.
 4. Copy the binaries, excluding the database and its `-wal`/`-shm` companions.
 5. Write `ServerUrl` and the listen port into `appsettings.json`.
-6. Check that a silent PDF printer is installed **for all users**, installing
-   SumatraPDF via `winget --scope machine` if not — see
-   [Silent PDF printing](#silent-pdf-printing).
+6. Check that a silent PDF printer the service account can read is present,
+   downloading the portable `SumatraPDF.exe` into `<install dir>\tools\` if not
+   — see [Silent PDF printing](#silent-pdf-printing).
 7. Create the service if missing — **automatic startup**, and configured to
    restart itself on failure (5s, 15s, then every 60s), since a scale-house PC
    is rarely watched. An existing service has its path corrected and startup
@@ -381,21 +396,27 @@ Invoke-RestMethod http://localhost:5230/api/printers
 #### Silent PDF printing
 
 Tickets are PDFs, and printing one without a dialog needs a helper. The service
-looks for `PDFtoPrinter.exe` in its install folder, then
-`C:\Program Files\PDFtoPrinter\PDFtoPrinter.exe`, then
-`C:\Program Files\SumatraPDF\SumatraPDF.exe`. Without one it falls back to
+looks for `tools\SumatraPDF.exe` in its install folder, then
+`PDFtoPrinter.exe` in the same folder, then the machine-wide
+`C:\Program Files\...` copies of either. Without one it falls back to
 `Start-Process -Verb PrintTo`, which wants a desktop — under a service account
 there isn't one, so tickets quietly never come out.
 
-**All-users installs only.** The service runs as LocalSystem, whose
-`LocalAppData` is `C:\Windows\System32\config\systemprofile\AppData\Local`, so
-an ordinary `winget install SumatraPDF.SumatraPDF` — which installs per-user —
-is invisible to it. It then works perfectly when you double-click a PDF and not
-at all from the service. The installer asks for `--scope machine` for exactly
-this reason, and says so when that fails.
+**Step 5 downloads it, and does not use `winget`.** The installer fetches the
+64-bit *portable* `SumatraPDF.exe` over HTTPS straight into
+`<install dir>\tools\`. winget was tried first and is the wrong tool here twice
+over: plenty of scale-house PCs have no winget at all (Server LTSC, or any box
+without the Store's App Installer), and where it exists its default per-user
+scope drops the exe into the installing admin's profile — invisible to
+LocalSystem, whose `LocalAppData` is
+`C:\Windows\System32\config\systemprofile\AppData\Local`. That install then
+works perfectly when you double-click a PDF and not at all from the service.
+A portable exe next to the binaries has neither problem.
 
-Fixing it later needs no reinstall: drop `PDFtoPrinter.exe` into the install
-folder, or install SumatraPDF for all users, and the next print finds it.
+If the download is blocked, the installer warns and carries on. Fixing it later
+needs no reinstall: copy `SumatraPDF.exe` into `<install dir>\tools\` (or drop
+`PDFtoPrinter.exe` into the install folder) and the next print finds it. Re-running
+the installer also does not wipe `tools\` — the binary copy leaves it alone.
 
 **Printers follow the same rule.** A printer added while logged in as yourself
 — including a shared `\\server\printer` — belongs to your profile and is

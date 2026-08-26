@@ -48,8 +48,8 @@
     satisfy - a redirect here normally means the URL is wrong.
 
 .PARAMETER SkipPdfTool
-    Do not try to install SumatraPDF when no silent PDF printer is found. The
-    install still reports what is missing.
+    Do not download SumatraPDF when no silent PDF printer is found. The install
+    still reports what is missing.
 
 .EXAMPLE
     .\install.ps1 -WebUrl https://valleyag.scaledata.net
@@ -365,13 +365,15 @@ Step 5 "Checking silent PDF printing..."
 # Start-Process -Verb PrintTo, which wants a desktop - under a service account
 # there isn't one, so tickets quietly never come out.
 #
-# Only MACHINE-WIDE locations count. The service runs as LocalSystem, whose
-# LocalAppData is C:\Windows\System32\config\systemprofile\AppData\Local - so a
-# per-user winget install of SumatraPDF (the default scope) is invisible to it,
-# even though it works perfectly when the operator runs the .exe by hand.
+# Only locations LocalSystem can read count. The service runs as LocalSystem,
+# whose LocalAppData is C:\Windows\System32\config\systemprofile\AppData\Local -
+# so a per-user install of SumatraPDF (what winget does by default) is invisible
+# to it, even though it works perfectly when the operator runs the .exe by hand.
+# $Dir\tools is where this installer stages the portable exe.
 function Find-PdfTool {
     param([string]$Dir)
     $candidates = @(
+        (Join-Path $Dir "tools\SumatraPDF.exe"),
         (Join-Path $Dir "PDFtoPrinter.exe"),
         "C:\Program Files\PDFtoPrinter\PDFtoPrinter.exe",
         "C:\Program Files (x86)\PDFtoPrinter\PDFtoPrinter.exe",
@@ -388,25 +390,48 @@ if ($pdfTool) {
 } elseif ($SkipPdfTool) {
     Warn "No silent PDF printer, and -SkipPdfTool was passed. Tickets will not print."
 } else {
-    Note "None found. Installing SumatraPDF for all users via winget..."
-    $winget = Get-Command winget -ErrorAction SilentlyContinue
-    if ($winget) {
-        # --scope machine matters: a user-scope install lands in the installing
-        # admin's profile, where the service account cannot see it.
-        & winget install --id SumatraPDF.SumatraPDF --scope machine --silent `
-            --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null
-        $pdfTool = Find-PdfTool $InstallDir
-    } else {
-        Note "winget is not available on this PC."
+    # Direct HTTPS download of the portable exe, NOT winget. winget is missing
+    # on Server LTSC and on plenty of ordinary scale-house PCs (no App Installer
+    # from the Store, or an account with no winget on its PATH), and where it
+    # does exist its default per-user scope drops the exe somewhere LocalSystem
+    # cannot read. A single portable .exe under $InstallDir\tools has neither
+    # problem and needs no installer to run.
+    $toolsDir   = Join-Path $InstallDir "tools"
+    $sumatraExe = Join-Path $toolsDir "SumatraPDF.exe"
+    $sumatraVer = "3.5.2"
+    Note "None found. Downloading portable SumatraPDF $sumatraVer..."
+    New-Item -ItemType Directory -Path $toolsDir -Force | Out-Null
+
+    # Windows Server 2016/2019 still negotiate TLS 1.0 by default here, which
+    # both hosts refuse - the download then fails with a bare connection error.
+    try {
+        [Net.ServicePointManager]::SecurityProtocol =
+            [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch { }
+
+    foreach ($u in @(
+        "https://www.sumatrapdfreader.org/dl/rel/$sumatraVer/SumatraPDF-$sumatraVer-64.exe",
+        "https://files.sumatrapdfreader.org/software/sumatrapdf/rel/$sumatraVer/SumatraPDF-$sumatraVer-64.exe"
+    )) {
+        try {
+            # -UseBasicParsing: no IE engine, which a fresh Server image lacks.
+            Invoke-WebRequest -Uri $u -OutFile $sumatraExe -UseBasicParsing -TimeoutSec 120
+            # A filtering proxy answers 200 with an HTML block page, so the size
+            # check is what tells a real binary from a "downloaded" error page.
+            if ((Test-Path $sumatraExe) -and (Get-Item $sumatraExe).Length -gt 1MB) { break }
+        } catch { }
+        Remove-Item $sumatraExe -Force -ErrorAction SilentlyContinue
     }
+    $pdfTool = Find-PdfTool $InstallDir
 
     if ($pdfTool) {
         Ok "Installed - $pdfTool"
     } else {
-        Warn "No silent PDF printer is installed for all users."
-        Warn "Tickets will NOT print until one is. Either:"
-        Warn "  - install SumatraPDF into C:\Program Files\SumatraPDF (run its"
-        Warn "    installer as admin, choosing the all-users option), or"
+        Warn "Could not download SumatraPDF (no internet, or a proxy blocked it)."
+        Warn "Tickets will NOT print until a silent PDF printer is present. Either:"
+        Warn "  - copy the 64-bit portable SumatraPDF.exe from"
+        Warn "    https://www.sumatrapdfreader.org/download-free-pdf-viewer to"
+        Warn "    $sumatraExe, or"
         Warn "  - drop PDFtoPrinter.exe into $InstallDir"
         Warn "The service looks for both on every print, so no reinstall is needed."
     }
