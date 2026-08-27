@@ -43,17 +43,22 @@ jobs:
           set -euo pipefail
           for RID in linux-arm64 linux-x64 win-x64; do
             dotnet publish PiPrintService.csproj -c Release -r "$RID" --self-contained true               -o "out/$RID/app" -p:PublishSingleFile=false
-            # Ship the repo's own installer alongside, when it has one.
-            for f in deploy/install.sh deploy/install.ps1; do
-              [ -f "$f" ] && cp "$f" "out/$RID/"
-            done
+            # Each package carries ONLY its own platform's installer. Shipping
+            # both put an install.ps1 in the Pi tarball and an install.sh in the
+            # Windows zip, which is just something else for an operator to pick
+            # wrong at 6am on a scale house PC.
+            #
             # The Windows package also carries the double-clickable wrapper and
             # its own README, so an operator can unzip it on a customer PC and
             # read what to do without going back to GitHub.
             case "$RID" in
               win-*)
+                cp deploy/install.ps1 "out/$RID/"
                 cp deploy/INSTALL.bat "out/$RID/"
                 cp deploy/package-README.txt "out/$RID/README.txt"
+                ;;
+              linux-*)
+                cp deploy/install.sh "out/$RID/"
                 ;;
             esac
             chmod +x "out/$RID/app/PiPrintService" 2>/dev/null || true
@@ -91,4 +96,80 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           V: ${{ steps.ver.outputs.version }}
         run: |
-          gh release create "v$V" --title "v$V"             --notes "Prebuilt, self-contained builds. No .NET, no SDK and no git needed on the target machine. Extract the archive for your platform and run the installer inside it - see the README for the exact command."             web-print-service-*
+          NOTES=$(cat <<EOF
+          Prebuilt, self-contained builds of the Web Print Service. No .NET, no
+          SDK and no git needed on the target machine.
+
+          Prints BasicWeigh tickets on the printers the machine it runs on can
+          see. It connects out to the web app over SignalR, so it works behind a
+          firewall with no inbound rules and no port forwarding.
+
+          ## Windows
+
+          Download \`web-print-service-win-x64.zip\`, unzip it, then from an
+          **admin** command prompt in that folder:
+
+          \`\`\`
+          INSTALL.bat https://your-web-app-url
+          \`\`\`
+
+          Installs the service with automatic startup, keeps the existing
+          database, and applies the web app URL. Re-run the same command to
+          update. Useful switches:
+
+          - \`-TestPrinter "Zebra ZD421"\` — print a test page at the end, so
+            the install is proved rather than assumed.
+          - \`-ServiceId scalehouse\` — name this PC on the web app's Printers
+            page. Defaults to the computer name.
+          - \`-ResetDb\` — start from a clean database.
+
+          Printing a PDF without a dialog needs a helper tool, so the installer
+          downloads the portable SumatraPDF into \`<install dir>\tools\`. No
+          winget involved. If the PC has no internet the installer warns and
+          carries on — see \`README.txt\` in the zip for how to add it later.
+
+          A printer installed under one user's profile is invisible to
+          LocalSystem, which is the usual reason tickets do not come out. The
+          installer prints the list of printers it can actually see; if the
+          ticket printer is missing from it, that is why.
+
+          ## Raspberry Pi (64-bit, Pi 4/5)
+
+          \`\`\`
+          curl -fsSL -o wps.tar.gz https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/web-print-service-linux-arm64.tar.gz
+          mkdir -p /tmp/wps && tar -xzf wps.tar.gz -C /tmp/wps
+          sudo bash /tmp/wps/install.sh https://your-web-app-url
+          \`\`\`
+
+          Bundles the BIXOLON POS CUPS driver pack and provisions the USB
+          BIXOLON SRP-F310II as a CUPS queue named \`TicketPrinter\`. No manual
+          driver install and no CUPS configuration. Override the queue name with
+          \`--printer-name\`, and the box's name on the web app with
+          \`--service-id\`.
+
+          ## Linux x64
+
+          Same command, with \`web-print-service-linux-x64.tar.gz\`. For a
+          Debian server or an x86 box driving the printer.
+
+          ---
+
+          The URL must match the web app's real scheme and port — a wrong one
+          leaves the service reconnecting forever. Every installer is safe to
+          re-run: that is also how you update, and the settings database is
+          preserved.
+
+          The printers then appear on the web app under
+          **Setup → Options → Printers**.
+
+          ## Pi git auth
+
+          Nothing above needs git on the target — that is the point of shipping
+          prebuilt. A Pi that also has to \`git clone\` or \`git pull\` a
+          **private** GTMichelli-Dev repo needs a one-time bootstrap first:
+
+          https://github.com/GTMichelli-Dev/pi-git-auth
+          EOF
+          )
+
+          gh release create "v$V" --title "v$V" --notes "$NOTES" web-print-service-*
