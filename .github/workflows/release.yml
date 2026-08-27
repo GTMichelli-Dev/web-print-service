@@ -161,6 +161,14 @@ jobs:
 
           The printers then appear on the web app under
           **Setup → Options → Printers**.
+
+          ## Pi git auth
+
+          Nothing above needs git on the target — that is the point of shipping
+          prebuilt. A Pi that also has to \`git clone\` or \`git pull\` a
+          **private** GTMichelli-Dev repo needs a one-time bootstrap first:
+
+          https://github.com/GTMichelli-Dev/pi-git-auth
           EOF
           )
 
