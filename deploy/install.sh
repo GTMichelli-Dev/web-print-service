@@ -124,11 +124,20 @@ if ! command -v curl > /dev/null 2>&1; then
     sudo apt-get update -qq && sudo apt-get install -y -qq curl
 fi
 
-# Returns 0 if $1 produces any HTTP response within 5s (200/404/500 — anything
-# means the server is up). Returns 1 only on actual connect/dns/timeout errors.
+# Budget for every probe against the web server. curl's --connect-timeout
+# covers name resolution as well as the TCP connect, and a Pi on a customer
+# network can burn several seconds on an AAAA lookup that is dropped rather
+# than refused. A 5s total budget failed those sites even though the server
+# was healthy and answering in well under a second once resolved.
+PROBE_CONNECT_TIMEOUT=15
+PROBE_MAX_TIME=30
+
+# Returns 0 if $1 produces any HTTP response within $PROBE_MAX_TIME (200/404/500
+# — anything means the server is up). Returns 1 only on connect/dns/timeout errors.
 url_reachable() {
     local code
-    code=$(curl -s -o /dev/null --max-time 5 --connect-timeout 5 \
+    code=$(curl -s -o /dev/null --max-time "$PROBE_MAX_TIME" \
+        --connect-timeout "$PROBE_CONNECT_TIMEOUT" \
         -w "%{http_code}" "$1" 2>/dev/null) || true
     [ -n "$code" ] && [ "$code" != "000" ]
 }
@@ -154,7 +163,7 @@ while true; do
         echo "  ${WEB_URL} is reachable."
         break
     fi
-    echo "  WARNING: Cannot reach ${WEB_URL} (no HTTP response within 5s)."
+    echo "  WARNING: Cannot reach ${WEB_URL} (no HTTP response within ${PROBE_MAX_TIME}s)."
     echo "  Check the host, port, and network — and that the web app is running."
     if [ ! -t 0 ]; then
         echo "  Non-interactive shell — aborting. Re-run with a valid URL."
@@ -176,7 +185,8 @@ done
 # follows a 301 — the hub then answers 405 and the service never connects.
 # The reachability check above is happy with a 301, so catch it here instead.
 if [[ "$WEB_URL" == http://* ]]; then
-    redirect_target=$(curl -s -o /dev/null --max-time 5 --connect-timeout 5 \
+    redirect_target=$(curl -s -o /dev/null --max-time "$PROBE_MAX_TIME" \
+        --connect-timeout "$PROBE_CONNECT_TIMEOUT" \
         -w "%{redirect_url}" "$WEB_URL" 2>/dev/null) || true
     if [[ "$redirect_target" == https://* ]]; then
         WEB_URL="https://${WEB_URL#http://}"
@@ -691,7 +701,8 @@ fi
 # Without this the install reports success even when the service can never
 # reach the hub, and the failure only shows up as an empty Printers page.
 # negotiate is a POST; anything other than 200 means the service won't connect.
-NEGOTIATE_CODE=$(curl -s -o /dev/null --max-time 10 --connect-timeout 5 \
+NEGOTIATE_CODE=$(curl -s -o /dev/null --max-time "$PROBE_MAX_TIME" \
+    --connect-timeout "$PROBE_CONNECT_TIMEOUT" \
     -X POST "${WEB_URL}/scaleHub/negotiate?negotiateVersion=1" \
     -w '%{http_code}' 2>/dev/null) || true
 if [ "$NEGOTIATE_CODE" = "200" ]; then
