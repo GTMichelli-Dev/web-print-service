@@ -42,7 +42,11 @@ DOTNET_CHANNEL="10.0"
 GITHUB_REPO="GTMichelli-Dev/web-print-service"
 BRANCH="master"
 WEB_URL=""
-PPD_OVERRIDE=""         # optional PPD file path override; defaults to the bundled SRP-F310II PPD
+PPD_OVERRIDE=""         # optional PPD file path override; wins over --model
+# Printer model, e.g. BK3-3 or SRP-F310II. Selects which bundled BIXOLON PPD
+# the queue gets. Empty means autodetect from the USB device URI, which is what
+# every normal install does.
+MODEL_OVERRIDE=""
 # Default page rotation in degrees (0/90/180/270). The SRP-F310II prints
 # 80mm receipts portrait, so no rotation by default. Maps to BIXOLON's
 # PPD-specific "Rotation" option AND the generic IPP
@@ -66,6 +70,7 @@ while [[ $# -gt 0 ]]; do
         --branch)          BRANCH="$2"; shift 2 ;;
         --install-dir)     INSTALL_DIR="$2"; shift 2 ;;
         --ppd)             PPD_OVERRIDE="$2"; shift 2 ;;
+        --model)           MODEL_OVERRIDE="$2"; shift 2 ;;
         --rotate)          ROTATION_DEFAULT="$2"; shift 2 ;;
         --media-size)      MEDIA_SIZE="$2"; shift 2 ;;
         --force-hostname)  FORCE_HOSTNAME="yes"; shift ;;
@@ -85,8 +90,12 @@ Options:
   --port <port>           API port (default: 5230)
   --branch <branch>       Git branch to install (default: master)
   --install-dir <path>    Install location (default: /opt/web-print-service)
-  --ppd <path>            Override printer PPD path (default: bundled
-                          BIXOLON SRP-F310II PPD)
+  --ppd <path>            Override printer PPD path. Wins over --model.
+  --model <model>         BIXOLON model to pick a bundled PPD for, e.g. BK3-3,
+                          BK5-3, SRP-F310II. Default: autodetected from the
+                          printer's USB device URI. The queue MUST have a PPD —
+                          a raw queue hands the ticket PDF to the printer
+                          verbatim and it prints "%PDF-1.4" as text.
   --rotate <deg>          Default rotation for the queue (0, 90, 180, 270).
                           Sets BIXOLON's PPD Rotation option and the generic
                           IPP orientation-requested-default fallback.
@@ -389,12 +398,14 @@ fi
 
 # ---- Install bundled BIXOLON POS CUPS driver pack ----
 # Looks for deploy/drivers/bixolon-cups/Software_BxlPOSCupsDrv_Linux_*.tgz
-# inside the script's checkout. Skips if the SRP-F310II PPD is already there.
+# inside the script's checkout. Skips if the pack's PPDs are already installed.
+# The pack ships every BIXOLON POS model (BK3-3, BK5-x, the SRP family, ...);
+# which one this queue uses is decided further down, off the detected model.
 BIXOLON_DRIVERS_DIR="${SOURCE_DIR}/deploy/drivers/bixolon-cups"
-PPD_DEFAULT="/usr/share/cups/model/Bixolon/SRPF310II_v1.0.4.ppd"
+BIXOLON_PPD_DIR="/usr/share/cups/model/Bixolon"
 
-if [ -f "${PPD_DEFAULT}" ]; then
-    echo "  BIXOLON SRP-F310II PPD already present (${PPD_DEFAULT})."
+if compgen -G "${BIXOLON_PPD_DIR}"/*.ppd > /dev/null; then
+    echo "  BIXOLON PPDs already present ($(ls "${BIXOLON_PPD_DIR}"/*.ppd | wc -l) models in ${BIXOLON_PPD_DIR})."
 elif compgen -G "${BIXOLON_DRIVERS_DIR}"/Software_BxlPOSCupsDrv_Linux_*.tgz > /dev/null; then
     BIXOLON_TGZ=$(ls "${BIXOLON_DRIVERS_DIR}"/Software_BxlPOSCupsDrv_Linux_*.tgz | sort | tail -1)
     echo "  Installing BIXOLON CUPS driver pack from $(basename "${BIXOLON_TGZ}")..."
@@ -411,9 +422,9 @@ elif compgen -G "${BIXOLON_DRIVERS_DIR}"/Software_BxlPOSCupsDrv_Linux_*.tgz > /d
         (
             cd "${BIXOLON_SETUP_DIR}" && \
                 sudo bash "./${BIXOLON_SETUP_NAME}" < /dev/null
-        ) || echo "  WARNING: BIXOLON setup script returned non-zero; check ${PPD_DEFAULT}."
-        if [ -f "${PPD_DEFAULT}" ]; then
-            echo "  BIXOLON PPDs installed under /usr/share/cups/model/Bixolon."
+        ) || echo "  WARNING: BIXOLON setup script returned non-zero; check ${BIXOLON_PPD_DIR}."
+        if compgen -G "${BIXOLON_PPD_DIR}"/*.ppd > /dev/null; then
+            echo "  BIXOLON PPDs installed under ${BIXOLON_PPD_DIR}."
         fi
     else
         echo "  WARNING: no setup_*.sh found inside ${BIXOLON_TGZ}."
@@ -561,8 +572,8 @@ if [ -f "${INSTALL_DIR}/appsettings.json" ]; then
     echo "  Updated appsettings.json"
 fi
 
-# ---- BIXOLON SRP-F310II USB printer setup ----
-echo "[6/7] Setting up BIXOLON SRP-F310II USB printer '${PRINTER_NAME}'..."
+# ---- BIXOLON USB printer setup ----
+echo "[6/7] Setting up BIXOLON USB printer '${PRINTER_NAME}'..."
 
 # Find a USB device URI — prefer a Bixolon match, otherwise first USB device.
 PRINTER_USB=""
@@ -578,23 +589,70 @@ if [ -z "$PRINTER_USB" ]; then
     echo "  Plug the printer in and re-run this script (or fix the URI in CUPS admin)."
 fi
 
-# Pick a driver: explicit --ppd > bundled SRP-F310II PPD > lpinfo model match > raw.
-DRIVER_FLAG="-m raw"
+# Which model is actually plugged in. The USB URI carries it, e.g.
+# "usb://BIXOLON/BK3-3?serial=...". --model overrides for a printer that is not
+# on USB (network/serial) or that reports an unhelpful URI.
+DETECTED_MODEL="$MODEL_OVERRIDE"
+if [ -z "$DETECTED_MODEL" ]; then
+    # Strip scheme + vendor + query: usb://BIXOLON/BK3-3?serial=123 -> BK3-3
+    DETECTED_MODEL=$(printf '%s' "$PRINTER_USB" | sed -e 's|.*/||' -e 's|?.*||' -e 's|%20| |g')
+fi
+
+# The bundled PPDs are named for the model with punctuation dropped and a
+# version suffix: BK3-3 -> BK33_v1.0.3.ppd, SRP-F310II -> SRPF310II_v1.0.4.ppd.
+# Matched case-insensitively (several are mixed case, e.g. SRP352plusIII) and
+# with the version globbed, so a driver-pack bump does not drop us back to raw.
+MODEL_KEY=$(printf '%s' "$DETECTED_MODEL" | tr -d ' _-')
+
+# Pick a driver: explicit --ppd > bundled PPD for the detected model > lpinfo
+# model match. There is deliberately no raw fallback — see the abort below.
+DRIVER_FLAG=""
 PPD_FILE="$PPD_OVERRIDE"
-if [ -z "$PPD_FILE" ] && [ -f "$PPD_DEFAULT" ]; then
-    PPD_FILE="$PPD_DEFAULT"
+if [ -z "$PPD_FILE" ] && [ -n "$MODEL_KEY" ]; then
+    PPD_FILE=$(ls "${BIXOLON_PPD_DIR}"/*.ppd 2>/dev/null | grep -i "/${MODEL_KEY}_v" | sort -V | tail -1)
+    [ -n "$PPD_FILE" ] && echo "  Detected model '${DETECTED_MODEL}' -> $(basename "$PPD_FILE")"
 fi
 if [ -n "$PPD_FILE" ] && [ -f "$PPD_FILE" ]; then
     DRIVER_FLAG="-P $PPD_FILE"
     echo "  Using PPD: $PPD_FILE"
-elif command -v lpinfo &> /dev/null; then
-    PRINTER_MODEL=$(sudo lpinfo -m 2>/dev/null | awk '/BIXOLON.*F310II/ {print $1; exit}')
-    if [ -n "$PRINTER_MODEL" ]; then
-        DRIVER_FLAG="-m $PRINTER_MODEL"
-        echo "  Using CUPS model: $PRINTER_MODEL"
-    else
-        echo "  No BIXOLON SRP-F310II PPD found in CUPS — using raw queue."
-        echo "  (Pass --ppd /path/to/SRPF310II.ppd to use the BIXOLON driver.)"
+elif command -v lpinfo &> /dev/null && [ -n "$MODEL_KEY" ]; then
+    CUPS_MODEL=$(sudo lpinfo -m 2>/dev/null | grep -i "Bixolon" | grep -i "${MODEL_KEY}" | awk '{print $1; exit}')
+    if [ -n "$CUPS_MODEL" ]; then
+        DRIVER_FLAG="-m $CUPS_MODEL"
+        echo "  Using CUPS model: $CUPS_MODEL"
+    fi
+fi
+
+# A raw queue is not a degraded mode here, it is a broken one: CUPS hands the
+# ticket PDF to the printer byte for byte and the printer prints its source
+# ("%PDF-1.4 / 1 0 obj / ...") as text. Stop rather than build a queue that is
+# guaranteed to produce garbage on the first ticket.
+if [ -z "$DRIVER_FLAG" ]; then
+    echo ""
+    echo "  ERROR: no CUPS driver (PPD) found for model '${DETECTED_MODEL}'."
+    echo "         Looked for ${BIXOLON_PPD_DIR}/${MODEL_KEY}_v*.ppd"
+    echo ""
+    echo "  Without a PPD the queue is raw and the printer prints the PDF's"
+    echo "  source text instead of the ticket. Fix one of these and re-run:"
+    echo "    - Bundled PPDs missing? Check ${BIXOLON_PPD_DIR} — the driver pack"
+    echo "      install step above should have populated it."
+    if compgen -G "${BIXOLON_PPD_DIR}"/*.ppd > /dev/null; then
+        echo "    - Model name not matching a bundled PPD. Available:"
+        ls "${BIXOLON_PPD_DIR}"/*.ppd | sed 's|.*/|        |; s|_v[0-9.]*\.ppd$||' | sort -u
+        echo "      Re-run with --model <name> (e.g. --model BK3-3)."
+    fi
+    echo "    - Or point at a PPD directly with --ppd /path/to/model.ppd"
+    exit 1
+fi
+
+# An existing queue keeps whatever driver it was created with — lpadmin -v only
+# swaps the device URI. A queue previously built as raw therefore stays raw and
+# keeps printing PDF source, so tear it down and rebuild it with the PPD.
+if lpstat -p "$PRINTER_NAME" &> /dev/null; then
+    EXISTING_PPD="/etc/cups/ppd/${PRINTER_NAME}.ppd"
+    if [ ! -f "$EXISTING_PPD" ] || grep -qi 'Raw Queue' "$EXISTING_PPD" 2>/dev/null; then
+        echo "  Existing queue '$PRINTER_NAME' is RAW (prints PDF source) — recreating with the PPD."
+        sudo lpadmin -x "$PRINTER_NAME" 2>/dev/null || true
     fi
 fi
 
