@@ -2,10 +2,16 @@
 # =============================================================================
 # Foundation Web Print Service - Self-Install Script for Raspberry Pi / Linux
 # =============================================================================
-# Bundles the BIXOLON POS CUPS driver pack and provisions the USB
-# BIXOLON SRP-F310II ticket printer as a CUPS queue named "TicketPrinter"
-# (the default; override with --printer-name). No manual driver install
-# or CUPS configuration required.
+# Bundles the BIXOLON POS CUPS driver pack, detects which BIXOLON model is
+# plugged in, and provisions it as a CUPS queue named "KioskPrinter" (the
+# default; override with --printer-name). No manual driver install or CUPS
+# configuration required.
+#
+# The BIXOLON is the KIOSK printer — the receipt printer in the driver-facing
+# display. A site's ticket printer is usually a desktop printer in the scale
+# house; this script does not provision it. Add it once through the CUPS web
+# admin this script enables (http://<pi>:631), name it TicketPrinter, and it
+# appears on the web app's Printers page alongside the kiosk queue.
 #
 # Recommended flow (run from inside a fresh checkout):
 #
@@ -19,7 +25,7 @@
 #
 # Examples:
 #   bash install.sh http://basicscale.scaledata.net
-#   bash install.sh http://192.168.1.100:5110 --printer-name TicketPrinter
+#   bash install.sh http://192.168.1.100:5110 --printer-name KioskPrinter
 #   bash install.sh http://192.168.1.100:5110 --service-id scalehouse --port 5230
 #
 # To update an existing install, run the same command again — it stops the
@@ -34,7 +40,7 @@ SOURCE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"  # parent of deploy/
 
 # ---- Defaults ----
 SERVICE_ID=""           # blank → falls back to $(hostname) after arg parsing
-PRINTER_NAME=""         # blank → prompted (default TicketPrinter) or set via --printer-name
+PRINTER_NAME=""         # blank → prompted (default KioskPrinter) or set via --printer-name
 SERVICE_PORT="5230"
 INSTALL_DIR="/opt/web-print-service"
 SERVICE_NAME="web-print-service"
@@ -57,7 +63,7 @@ ROTATION_DEFAULT="0"
 # "74X72MMY200MM" = 72mm print width x 200mm receipt. (Do NOT use the 2000mm
 # continuous-strip sizes for fixed-page ticket PDFs — CUPS scales the page to
 # fill the strip and prints a 3-foot banner.) Inspect alternates with:
-#   lpoptions -p TicketPrinter -l | grep -i pagesize
+#   lpoptions -p KioskPrinter -l | grep -i pagesize
 MEDIA_SIZE="74X72MMY200MM"
 FORCE_HOSTNAME=""       # set with --force-hostname to skip the generic-hostname check
 
@@ -85,7 +91,7 @@ Usage: install.sh <web-server-url> [options]
 
 Options:
   --printer-name <name>   CUPS printer queue name. If omitted, the script
-                          prompts interactively with a default of TicketPrinter.
+                          prompts interactively with a default of KioskPrinter.
   --service-id <id>       SignalR group ID for this service (default: \$(hostname))
   --port <port>           API port (default: 5230)
   --branch <branch>       Git branch to install (default: master)
@@ -103,7 +109,7 @@ Options:
   --media-size <ppd-val>  BIXOLON PPD PageSize value for the queue. Default is
                           "74X72MMY200MM" (72mm x 200mm receipt).
                           List alternates on the Pi with:
-                              lpoptions -p TicketPrinter -l | grep -i pagesize
+                              lpoptions -p KioskPrinter -l | grep -i pagesize
   --force-hostname        Skip the check that warns about generic hostnames
                           (raspberrypi, kiosk, localhost, pi, debian, ubuntu)
   --help                  Show this help
@@ -158,7 +164,7 @@ if [ -z "$WEB_URL" ]; then
     fi
     if [ -z "$WEB_URL" ]; then
         echo "ERROR: Web server URL is required."
-        echo "Usage: install.sh http://your-server:5110 [--printer-name TicketPrinter]"
+        echo "Usage: install.sh http://your-server:5110 [--printer-name KioskPrinter]"
         exit 1
     fi
 fi
@@ -206,14 +212,15 @@ if [[ "$WEB_URL" == http://* ]]; then
 fi
 
 # Prompt for the printer queue name if not provided via --printer-name.
-# Default to TicketPrinter; operator can hit Enter to accept.
+# Default to KioskPrinter — this queue is the BIXOLON receipt printer in the
+# kiosk, not the scale house's ticket printer. Operator can hit Enter to accept.
 if [ -z "$PRINTER_NAME" ]; then
     if [ -t 0 ]; then
-        printf "Printer queue name [TicketPrinter]: "
+        printf "BIXOLON kiosk printer queue name [KioskPrinter]: "
         read -r answer
-        PRINTER_NAME="${answer:-TicketPrinter}"
+        PRINTER_NAME="${answer:-KioskPrinter}"
     else
-        PRINTER_NAME="TicketPrinter"
+        PRINTER_NAME="KioskPrinter"
     fi
 fi
 
@@ -397,12 +404,26 @@ if command -v iptables &> /dev/null; then
 fi
 
 # ---- Install bundled BIXOLON POS CUPS driver pack ----
-# Looks for deploy/drivers/bixolon-cups/Software_BxlPOSCupsDrv_Linux_*.tgz
-# inside the script's checkout. Skips if the pack's PPDs are already installed.
-# The pack ships every BIXOLON POS model (BK3-3, BK5-x, the SRP family, ...);
-# which one this queue uses is decided further down, off the detected model.
-BIXOLON_DRIVERS_DIR="${SOURCE_DIR}/deploy/drivers/bixolon-cups"
+# Skips if the pack's PPDs are already installed. The pack ships every BIXOLON
+# POS model (BK3-3, BK5-x, the SRP family, ...); which one this queue uses is
+# decided further down, off the detected model.
+#
+# Two layouts have to work. In a git checkout the script sits in deploy/ and the
+# pack is beside it. In a release tarball the script sits at the root next to
+# app/ and drivers/ — SOURCE_DIR is then the parent of the extract dir, which is
+# not ours to look in. Checking only the checkout path is how the release
+# packages shipped with no drivers at all, so every Pi installed from one got a
+# raw queue and printed the ticket PDF's source text.
 BIXOLON_PPD_DIR="/usr/share/cups/model/Bixolon"
+BIXOLON_DRIVERS_DIR=""
+for candidate in "${SCRIPT_DIR}/drivers/bixolon-cups" "${SOURCE_DIR}/deploy/drivers/bixolon-cups"; do
+    if compgen -G "${candidate}"/Software_BxlPOSCupsDrv_Linux_*.tgz > /dev/null; then
+        BIXOLON_DRIVERS_DIR="${candidate}"
+        break
+    fi
+done
+# Nothing found: keep the checkout path for the "where I looked" message below.
+[ -z "${BIXOLON_DRIVERS_DIR}" ] && BIXOLON_DRIVERS_DIR="${SOURCE_DIR}/deploy/drivers/bixolon-cups"
 
 if compgen -G "${BIXOLON_PPD_DIR}"/*.ppd > /dev/null; then
     echo "  BIXOLON PPDs already present ($(ls "${BIXOLON_PPD_DIR}"/*.ppd | wc -l) models in ${BIXOLON_PPD_DIR})."
@@ -645,6 +666,30 @@ if [ -z "$DRIVER_FLAG" ]; then
     exit 1
 fi
 
+# Retire the legacy "TicketPrinter" name for the BIXOLON. Earlier versions of
+# this script provisioned the kiosk receipt printer under that name, which is
+# the scale house's desktop printer's name — so a site could not have both.
+#
+# The device URI is what makes this safe. A TicketPrinter queue is only removed
+# when it points at the very BIXOLON we are about to provision; a TicketPrinter
+# that is the operator's own desktop printer points somewhere else and is left
+# strictly alone. Deleting that queue would take out the site's ticket printing
+# on what is supposed to be a routine re-run.
+LEGACY_NAME="TicketPrinter"
+if [ "$PRINTER_NAME" != "$LEGACY_NAME" ] && lpstat -p "$LEGACY_NAME" &> /dev/null; then
+    # Anchored, not greedy: the URI itself contains a colon ("usb://"), so
+    # ".*:" would swallow the scheme and never match PRINTER_USB.
+    LEGACY_URI=$(lpstat -v "$LEGACY_NAME" 2>/dev/null | sed 's|^device for [^:]*: ||')
+    if [ -n "$LEGACY_URI" ] && [ "$LEGACY_URI" = "$PRINTER_USB" ]; then
+        echo "  Found legacy queue '$LEGACY_NAME' on this BIXOLON — replacing it with '$PRINTER_NAME'."
+        echo "  NOTE: re-pick the printers in the web app (Setup > Options > Printers, and"
+        echo "        any per-scale or per-kiosk assignment) — they still name '$LEGACY_NAME'."
+        sudo lpadmin -x "$LEGACY_NAME" 2>/dev/null || true
+    else
+        echo "  Leaving existing queue '$LEGACY_NAME' alone (different device: ${LEGACY_URI:-unknown})."
+    fi
+fi
+
 # An existing queue keeps whatever driver it was created with — lpadmin -v only
 # swaps the device URI. A queue previously built as raw therefore stays raw and
 # keeps printing PDF source, so tear it down and rebuild it with the PPD.
@@ -780,7 +825,7 @@ if sudo systemctl is-active --quiet ${SERVICE_NAME}; then
     echo "  Swagger:      http://$(hostname -I | awk '{print $1}'):${SERVICE_PORT}/swagger"
     echo "  Web Server:   ${WEB_URL}"
     echo "  Service ID:   ${SERVICE_ID}"
-    echo "  Printer:      ${PRINTER_NAME} (BIXOLON SRP-F310II, USB)"
+    echo "  Printer:      ${PRINTER_NAME} (BIXOLON ${DETECTED_MODEL}, USB) — kiosk receipt printer"
     echo ""
     echo "  CUPS Admin:   http://${PI_IP:-localhost}:631"
     echo ""
@@ -792,9 +837,15 @@ if sudo systemctl is-active --quiet ${SERVICE_NAME}; then
     echo "    echo 'Printer test' | lp -d ${PRINTER_NAME}"
     echo ""
     echo "  Next: open Foundation's Setup -> Printers page and assign"
-    echo "  '${SERVICE_ID}:${PRINTER_NAME}' as the inbound/outbound printer."
+    echo "  '${SERVICE_ID}:${PRINTER_NAME}' as the KIOSK printer."
     echo "  (If this box previously registered under a different service id,"
     echo "  re-save the printer assignments.)"
+    echo ""
+    echo "  Scale house ticket printer: this script does not provision it — it"
+    echo "  only handles the BIXOLON. Add the desktop printer once at"
+    echo "  http://${PI_IP:-localhost}:631 (Administration -> Add Printer), name"
+    echo "  it TicketPrinter, and it joins '${PRINTER_NAME}' on the Printers page."
+    echo "  Then assign it as the inbound/outbound printer."
     echo ""
     echo "  To update later, run this command again."
     echo "============================================"

@@ -59,6 +59,14 @@ jobs:
                 ;;
               linux-*)
                 cp deploy/install.sh "out/$RID/"
+                # The BIXOLON CUPS driver pack. Without it the installer has no
+                # PPD to give the queue, CUPS falls back to a raw queue, and the
+                # printer prints the ticket PDF's source text instead of the
+                # ticket. ~1.8MB against a ~50MB package, and it is the whole
+                # reason the Pi install needs no manual driver step.
+                mkdir -p "out/$RID/drivers/bixolon-cups"
+                cp deploy/drivers/bixolon-cups/Software_BxlPOSCupsDrv_Linux_*.tgz \
+                   "out/$RID/drivers/bixolon-cups/"
                 ;;
             esac
             chmod +x "out/$RID/app/PiPrintService" 2>/dev/null || true
@@ -86,7 +94,13 @@ jobs:
                      test -f "out/$RID/install.ps1"           || { echo "::error::missing $RID installer"; exit 1; }
                      test -f "out/$RID/INSTALL.bat"           || { echo "::error::missing $RID wrapper"; exit 1; } ;;
               *)     test -f "out/$RID/app/PiPrintService"     || { echo "::error::missing $RID binary"; exit 1; }
-                     test -f "out/$RID/install.sh"            || { echo "::error::missing $RID installer"; exit 1; } ;;
+                     test -f "out/$RID/install.sh"            || { echo "::error::missing $RID installer"; exit 1; }
+                     # Same reasoning as the installer check: a Linux package
+                     # without the driver pack installs cleanly and then prints
+                     # PDF source, which is far more expensive to diagnose in a
+                     # scale house than a failed build is here.
+                     compgen -G "out/$RID/drivers/bixolon-cups/Software_BxlPOSCupsDrv_Linux_*.tgz" > /dev/null \
+                       || { echo "::error::missing $RID BIXOLON driver pack"; exit 1; } ;;
             esac
           done
           echo "Packages OK"
@@ -141,11 +155,30 @@ jobs:
           sudo bash /tmp/wps/install.sh https://your-web-app-url
           \`\`\`
 
-          Bundles the BIXOLON POS CUPS driver pack and provisions the USB
-          BIXOLON SRP-F310II as a CUPS queue named \`TicketPrinter\`. No manual
-          driver install and no CUPS configuration. Override the queue name with
-          \`--printer-name\`, and the box's name on the web app with
-          \`--service-id\`.
+          Bundles the BIXOLON POS CUPS driver pack, detects which BIXOLON model
+          is plugged in, and provisions it as a CUPS queue named
+          \`KioskPrinter\` with the matching driver. No manual driver install
+          and no CUPS configuration. Override the queue name with
+          \`--printer-name\`, the detected model with \`--model BK3-3\`, and the
+          box's name on the web app with \`--service-id\`.
+
+          The BIXOLON is the **kiosk** receipt printer. A site's ticket printer
+          is usually a desktop printer in the scale house — this installer does
+          not provision it. Add it once at \`http://<pi>:631\`
+          (Administration → Add Printer), name it \`TicketPrinter\`, and it
+          appears on the web app's Printers page beside the kiosk queue.
+
+          Upgrading from a version that named the BIXOLON queue
+          \`TicketPrinter\`: the installer replaces it with \`KioskPrinter\`,
+          but only when that queue points at the BIXOLON itself — a
+          \`TicketPrinter\` that is your own desktop printer is left alone.
+          Re-pick the printers under **Setup → Options → Printers** afterward,
+          along with any per-scale or per-kiosk assignment.
+
+          The installer will not fall back to a raw queue: without a driver CUPS
+          hands the printer the ticket PDF unchanged and it prints \`%PDF-1.4\`
+          as text, so a model it cannot match is a hard error listing the models
+          it does have.
 
           ## Linux x64
 
