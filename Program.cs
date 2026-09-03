@@ -31,14 +31,20 @@ var dbPath = Path.Combine(AppContext.BaseDirectory, "webprintservice.db");
 builder.Services.AddDbContext<PrintDbContext>(opt =>
     opt.UseSqlite($"Data Source={dbPath}"));
 
-// Services — register the right print client based on OS
+// Services — register the right print client based on OS, behind a short-lived
+// cache of the printer list (see CachedPrintClient for why). The concrete client
+// is registered too so the decorator can be handed it.
 if (OperatingSystem.IsWindows())
 {
-    builder.Services.AddSingleton<IPrintClient, WindowsPrintClient>();
+    builder.Services.AddSingleton<WindowsPrintClient>();
+    builder.Services.AddSingleton<IPrintClient>(sp =>
+        new CachedPrintClient(sp.GetRequiredService<WindowsPrintClient>()));
 }
 else
 {
-    builder.Services.AddSingleton<IPrintClient, CupsClient>();
+    builder.Services.AddSingleton<CupsClient>();
+    builder.Services.AddSingleton<IPrintClient>(sp =>
+        new CachedPrintClient(sp.GetRequiredService<CupsClient>()));
 }
 builder.Services.AddSingleton<RestartSignal>();
 builder.Services.AddHostedService<PrintWorker>();

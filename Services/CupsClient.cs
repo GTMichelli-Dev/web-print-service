@@ -71,9 +71,12 @@ public class CupsClient : IPrintClient
 
                 try
                 {
-                    var (ec, opts) = await RunCommandAsync("lpoptions", $"-p {printer.PrinterId} -l");
-                    // Parse printer-info if available
-                    var (ec2, info) = await RunCommandAsync("lpoptions", $"-p {printer.PrinterId}");
+                    // Only printer-info is wanted here. A "lpoptions -l" used to
+                    // run first and its output was discarded — that flag makes
+                    // CUPS parse and dump every option in the PPD (201 choices
+                    // across 16 option groups on a BIXOLON BK3-3's 42KB PPD),
+                    // once per printer, for nothing.
+                    var (ec, info) = await RunCommandAsync("lpoptions", $"-p {printer.PrinterId}");
                     var infoMatch = Regex.Match(info, @"printer-info='([^']*)'");
                     if (infoMatch.Success)
                         printer.DisplayName = infoMatch.Groups[1].Value;

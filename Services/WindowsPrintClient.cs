@@ -23,14 +23,15 @@ public class WindowsPrintClient : IPrintClient
 
         try
         {
-            // Get default printer name first
-            var (defEc, defOutput) = await RunPowerShellAsync(
-                "(Get-CimInstance -ClassName Win32_Printer -Filter \\\"Default=True\\\").Name");
-            var defaultPrinterName = defEc == 0 ? defOutput.Trim() : "";
-
-            // Get all printers
+            // The printer list and the default printer come back from ONE
+            // powershell.exe. Two separate invocations each paid the shell's
+            // start-up cost — the better part of a second on a scale house PC —
+            // and enumerating printers is already the slowest thing this service
+            // does, on every page load of every ticket grid.
             var (exitCode, output) = await RunPowerShellAsync(
-                "Get-Printer | Select-Object Name, PrinterStatus | ConvertTo-Json -Compress");
+                "$d=(Get-CimInstance -ClassName Win32_Printer -Filter \\\"Default=True\\\").Name; " +
+                "Get-Printer | Select-Object Name, PrinterStatus, @{n='IsDefault';e={$_.Name -eq $d}} " +
+                "| ConvertTo-Json -Compress");
 
             if (exitCode != 0)
             {
@@ -51,7 +52,7 @@ public class WindowsPrintClient : IPrintClient
             {
                 var name = elem.TryGetProperty("Name", out var n) && n.ValueKind == System.Text.Json.JsonValueKind.String ? n.GetString() ?? "" : "";
                 var statusNum = elem.TryGetProperty("PrinterStatus", out var ps) && ps.ValueKind == System.Text.Json.JsonValueKind.Number ? ps.GetInt32() : 0;
-                var isDefault = name.Equals(defaultPrinterName, StringComparison.OrdinalIgnoreCase);
+                var isDefault = elem.TryGetProperty("IsDefault", out var df) && df.ValueKind == System.Text.Json.JsonValueKind.True;
 
                 // PrinterStatus: 0=Normal, 1=Paused, 2=Error, 3=PendingDeletion, 4=PaperJam, 5=PaperOut, 6=ManualFeed, 7=PaperProblem
                 var status = statusNum switch
