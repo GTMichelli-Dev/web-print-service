@@ -123,6 +123,13 @@ public class CupsClient : IPrintClient
 
         try
         {
+            // Timed separately from the spool below. The fetch covers DNS, the
+            // TCP+TLS handshake and the server rendering the report; the spool is
+            // just handing the file to CUPS. When an operator says the first
+            // ticket after a lull is slow, this is the line that says whether the
+            // wait was the connection or the printer.
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
             var response = await http.GetAsync(url);
             if (!response.IsSuccessStatusCode)
                 return (false, $"Failed to download: HTTP {(int)response.StatusCode}");
@@ -131,7 +138,11 @@ public class CupsClient : IPrintClient
             await response.Content.CopyToAsync(fs);
             fs.Close();
 
-            return await PrintFileAsync(printerId, tempFile, jobTitle);
+            var fetchedMs = sw.ElapsedMilliseconds;
+            var result = await PrintFileAsync(printerId, tempFile, jobTitle);
+            _log.LogInformation("Print timing for {Printer}: fetch {FetchMs}ms, spool {SpoolMs}ms",
+                printerId, fetchedMs, sw.ElapsedMilliseconds - fetchedMs);
+            return result;
         }
         finally
         {

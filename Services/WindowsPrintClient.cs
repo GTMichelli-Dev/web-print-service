@@ -133,6 +133,10 @@ public class WindowsPrintClient : IPrintClient
 
         try
         {
+            // Timed separately from the spool below - see the same split in
+            // CupsClient for why the two numbers are worth keeping apart.
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
             var response = await http.GetAsync(url);
             if (!response.IsSuccessStatusCode)
                 return (false, $"Failed to download: HTTP {(int)response.StatusCode}");
@@ -141,7 +145,11 @@ public class WindowsPrintClient : IPrintClient
             await response.Content.CopyToAsync(fs);
             fs.Close();
 
-            return await PrintFileAsync(printerId, tempFile, jobTitle);
+            var fetchedMs = sw.ElapsedMilliseconds;
+            var result = await PrintFileAsync(printerId, tempFile, jobTitle);
+            _log.LogInformation("Print timing for {Printer}: fetch {FetchMs}ms, spool {SpoolMs}ms",
+                printerId, fetchedMs, sw.ElapsedMilliseconds - fetchedMs);
+            return result;
         }
         finally
         {
