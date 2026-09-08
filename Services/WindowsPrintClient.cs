@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
@@ -84,11 +84,19 @@ public class WindowsPrintClient : IPrintClient
         return printers;
     }
 
-    public async Task<(bool success, string message)> PrintFileAsync(string printerId, string filePath, string? jobTitle = null)
+    public async Task<(bool success, string message)> PrintFileAsync(string printerId, string filePath, string? jobTitle = null, Func<string, Task>? onJobQueued = null)
     {
         try
         {
             var ext = Path.GetExtension(filePath).ToLowerInvariant();
+
+            // The Windows helpers below all block until the job is spooled, so the only
+            // point we can announce "printing" is just before handing it to the spooler.
+            if (onJobQueued != null)
+            {
+                try { await onJobQueued(""); }
+                catch (Exception ex) { _log.LogWarning("onJobQueued callback failed: {Msg}", ex.Message); }
+            }
 
             // For PDF files, use SumatraPDF if available, otherwise PowerShell Out-Printer
             if (ext == ".pdf")
@@ -126,7 +134,7 @@ public class WindowsPrintClient : IPrintClient
         }
     }
 
-    public async Task<(bool success, string message)> PrintFromUrlAsync(string printerId, string url, string? jobTitle = null, HttpClient? http = null)
+    public async Task<(bool success, string message)> PrintFromUrlAsync(string printerId, string url, string? jobTitle = null, HttpClient? http = null, Func<string, Task>? onJobQueued = null)
     {
         http ??= new HttpClient();
         var tempFile = Path.Combine(Path.GetTempPath(), $"print_{Guid.NewGuid():N}.pdf");
@@ -146,9 +154,21 @@ public class WindowsPrintClient : IPrintClient
             fs.Close();
 
             var fetchedMs = sw.ElapsedMilliseconds;
-            var result = await PrintFileAsync(printerId, tempFile, jobTitle);
-            _log.LogInformation("Print timing for {Printer}: fetch {FetchMs}ms, spool {SpoolMs}ms",
-                printerId, fetchedMs, sw.ElapsedMilliseconds - fetchedMs);
+
+            // Spool now ends when the spooler accepts the job, not when PrintFileAsync
+            // returns - it waits for the job to drain. Splitting the two keeps "spool"
+            // meaning what it did before and puts the printer's own time in "print",
+            // which is the number an operator feels as the wait for the ticket.
+            long spooledMs = -1;
+            var result = await PrintFileAsync(printerId, tempFile, jobTitle, async jobId =>
+            {
+                spooledMs = sw.ElapsedMilliseconds;
+                if (onJobQueued != null) await onJobQueued(jobId);
+            });
+
+            var spoolEnd = spooledMs < 0 ? sw.ElapsedMilliseconds : spooledMs;
+            _log.LogInformation("Print timing for {Printer}: fetch {FetchMs}ms, spool {SpoolMs}ms, print {PrintMs}ms",
+                printerId, fetchedMs, spoolEnd - fetchedMs, sw.ElapsedMilliseconds - spoolEnd);
             return result;
         }
         finally

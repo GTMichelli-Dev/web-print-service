@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.SignalR.Client;
+﻿using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.EntityFrameworkCore;
 using WebPrintService.Data;
 using WebPrintService.Services;
@@ -205,9 +205,10 @@ public class PrintWorker : BackgroundService
                 _log.LogInformation("Printing ticket {Ticket} to {Printer} from {Url}", ticketId, cupsPrinterId, pdfUrl);
 
                 var http = _httpFactory.CreateClient();
-                var (success, message) = await _printer.PrintFromUrlAsync(cupsPrinterId, pdfUrl, $"Ticket-{ticketId}", http);
+                var (success, message) = await _printer.PrintFromUrlAsync(cupsPrinterId, pdfUrl, $"Ticket-{ticketId}", http,
+                    jobId => ReportPrintJobStarted(ticketId, cupsPrinterId, jobId));
 
-                await ReportPrintResult(success, success ? $"Ticket {ticketId} sent to {cupsPrinterId}" : message);
+                await ReportPrintResult(success, success ? $"Ticket {ticketId} sent to {cupsPrinterId}" : message, ticketId);
             }
             catch (Exception ex)
             {
@@ -298,7 +299,7 @@ public class PrintWorker : BackgroundService
         });
     }
 
-    private async Task ReportPrintResult(bool success, string message)
+    private async Task ReportPrintResult(bool success, string message, string? ticketId = null)
     {
         if (_connection?.State == HubConnectionState.Connected)
         {
@@ -307,8 +308,33 @@ public class PrintWorker : BackgroundService
                 await _connection.InvokeAsync("PrintResult", new
                 {
                     serviceId = _serviceId,
+                    ticketId,
                     success,
                     message
+                });
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>
+    /// Tells the web app the spooler has taken the job. The kiosk switches to "Printing Ticket"
+    /// here, and stays there until the matching PrintResult says the job is done.
+    /// </summary>
+    private async Task ReportPrintJobStarted(string ticketId, string printerId, string jobId)
+    {
+        _log.LogInformation("Job {Job} started for ticket {Ticket} on {Printer}", jobId, ticketId, printerId);
+
+        if (_connection?.State == HubConnectionState.Connected)
+        {
+            try
+            {
+                await _connection.InvokeAsync("PrintJobStarted", new
+                {
+                    serviceId = _serviceId,
+                    ticketId,
+                    printerId,
+                    jobId
                 });
             }
             catch { }

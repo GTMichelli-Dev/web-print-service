@@ -1,4 +1,4 @@
-namespace WebPrintService.Services;
+﻿namespace WebPrintService.Services;
 
 /// <summary>
 /// Platform-agnostic print client interface.
@@ -7,8 +7,12 @@ namespace WebPrintService.Services;
 public interface IPrintClient
 {
     Task<List<PrinterInfo>> GetPrintersAsync();
-    Task<(bool success, string message)> PrintFileAsync(string printerId, string filePath, string? jobTitle = null);
-    Task<(bool success, string message)> PrintFromUrlAsync(string printerId, string url, string? jobTitle = null, HttpClient? http = null);
+    /// <param name="onJobQueued">
+    /// Invoked with the spooler job id as soon as the job is accepted by the print system,
+    /// before the physical print finishes. Used to tell the kiosk the ticket is now printing.
+    /// </param>
+    Task<(bool success, string message)> PrintFileAsync(string printerId, string filePath, string? jobTitle = null, Func<string, Task>? onJobQueued = null);
+    Task<(bool success, string message)> PrintFromUrlAsync(string printerId, string url, string? jobTitle = null, HttpClient? http = null, Func<string, Task>? onJobQueued = null);
     Task<string> GetPrinterStatusAsync(string printerId);
     Task<bool> IsAvailableAsync();
 }

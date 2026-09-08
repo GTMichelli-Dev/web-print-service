@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace WebPrintService.Services;
@@ -93,9 +93,16 @@ public class CupsClient : IPrintClient
     }
 
     /// <summary>
-    /// Print a file (PDF, image, etc.) to a specific printer.
+    /// How long to wait for a submitted CUPS job to leave the queue before giving up on it.
+    /// Kept below the kiosk's own print timeout so the service decides the outcome, not the client.
     /// </summary>
-    public async Task<(bool success, string message)> PrintFileAsync(string printerId, string filePath, string? jobTitle = null)
+    private static readonly TimeSpan JobWaitTimeout = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// Print a file (PDF, image, etc.) to a specific printer.
+    /// Returns once CUPS has finished the job, so the caller knows the ticket is actually out.
+    /// </summary>
+    public async Task<(bool success, string message)> PrintFileAsync(string printerId, string filePath, string? jobTitle = null, Func<string, Task>? onJobQueued = null)
     {
         var args = $"-d {printerId}";
         if (!string.IsNullOrEmpty(jobTitle))
@@ -103,20 +110,85 @@ public class CupsClient : IPrintClient
         args += $" \"{filePath}\"";
 
         var (exitCode, output) = await RunCommandAsync("lp", args);
-        if (exitCode == 0)
+        if (exitCode != 0)
         {
-            _log.LogInformation("Print job sent to {Printer}: {Output}", printerId, output.Trim());
-            return (true, output.Trim());
+            _log.LogWarning("Print failed on {Printer} (exit {Code}): {Output}", printerId, exitCode, output);
+            return (false, output.Trim());
         }
 
-        _log.LogWarning("Print failed on {Printer} (exit {Code}): {Output}", printerId, exitCode, output);
-        return (false, output.Trim());
+        var message = output.Trim();
+        var jobId = ParseJobId(message);
+        _log.LogInformation("Print job {Job} queued on {Printer}: {Output}", jobId, printerId, message);
+
+        if (onJobQueued != null)
+        {
+            try { await onJobQueued(jobId); }
+            catch (Exception ex) { _log.LogWarning("onJobQueued callback failed: {Msg}", ex.Message); }
+        }
+
+        // lp exiting 0 only means CUPS accepted the job. A job that dies in the filter chain
+        // ("Filter failed") sits in the queue forever, so success is not known until it drains.
+        if (!string.IsNullOrEmpty(jobId))
+        {
+            var (completed, reason) = await WaitForJobAsync(printerId, jobId);
+            if (!completed)
+            {
+                _log.LogWarning("Print job {Job} did not complete: {Reason}", jobId, reason);
+                return (false, $"Job {jobId} did not print: {reason}");
+            }
+        }
+
+        return (true, message);
+    }
+
+    /// <summary>
+    /// Pull the job id out of lp's "request id is Printer-42 (1 file(s))" response.
+    /// </summary>
+    private static string ParseJobId(string lpOutput)
+    {
+        var match = Regex.Match(lpOutput, @"request id is (\S+)");
+        return match.Success ? match.Groups[1].Value : "";
+    }
+
+    /// <summary>
+    /// Poll CUPS until the job drains out of the queue. Returns false if it is still sitting there
+    /// when the timeout expires, or if the queue itself stopped (a failed filter disables it).
+    /// </summary>
+    private async Task<(bool completed, string reason)> WaitForJobAsync(string printerId, string jobId)
+    {
+        var deadline = DateTime.UtcNow + JobWaitTimeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(400);
+
+            var (exitCode, output) = await RunCommandAsync("lpstat", "-o");
+            if (exitCode != 0) return (true, ""); // can't tell — assume it printed rather than cry wolf
+
+            // lpstat -o lists one line per not-yet-completed job, starting with the job id
+            var stillQueued = output
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Any(line => line.TrimStart().StartsWith(jobId + " ", StringComparison.Ordinal));
+
+            if (!stillQueued)
+            {
+                _log.LogInformation("Print job {Job} finished.", jobId);
+                return (true, "");
+            }
+
+            // CUPS disables the queue when a filter fails — no point waiting out the timeout
+            var (stateCode, state) = await RunCommandAsync("lpstat", $"-p {printerId}");
+            if (stateCode == 0 && state.Contains("disabled", StringComparison.OrdinalIgnoreCase))
+                return (false, state.Trim());
+        }
+
+        return (false, $"still queued after {JobWaitTimeout.TotalSeconds:0}s");
     }
 
     /// <summary>
     /// Print from a URL (downloads then prints).
     /// </summary>
-    public async Task<(bool success, string message)> PrintFromUrlAsync(string printerId, string url, string? jobTitle = null, HttpClient? http = null)
+    public async Task<(bool success, string message)> PrintFromUrlAsync(string printerId, string url, string? jobTitle = null, HttpClient? http = null, Func<string, Task>? onJobQueued = null)
     {
         http ??= new HttpClient();
         var tempFile = Path.Combine(Path.GetTempPath(), $"print_{Guid.NewGuid():N}.pdf");
@@ -139,9 +211,21 @@ public class CupsClient : IPrintClient
             fs.Close();
 
             var fetchedMs = sw.ElapsedMilliseconds;
-            var result = await PrintFileAsync(printerId, tempFile, jobTitle);
-            _log.LogInformation("Print timing for {Printer}: fetch {FetchMs}ms, spool {SpoolMs}ms",
-                printerId, fetchedMs, sw.ElapsedMilliseconds - fetchedMs);
+
+            // Spool now ends when the spooler accepts the job, not when PrintFileAsync
+            // returns - it waits for the job to drain. Splitting the two keeps "spool"
+            // meaning what it did before and puts the printer's own time in "print",
+            // which is the number an operator feels as the wait for the ticket.
+            long spooledMs = -1;
+            var result = await PrintFileAsync(printerId, tempFile, jobTitle, async jobId =>
+            {
+                spooledMs = sw.ElapsedMilliseconds;
+                if (onJobQueued != null) await onJobQueued(jobId);
+            });
+
+            var spoolEnd = spooledMs < 0 ? sw.ElapsedMilliseconds : spooledMs;
+            _log.LogInformation("Print timing for {Printer}: fetch {FetchMs}ms, spool {SpoolMs}ms, print {PrintMs}ms",
+                printerId, fetchedMs, spoolEnd - fetchedMs, sw.ElapsedMilliseconds - spoolEnd);
             return result;
         }
         finally

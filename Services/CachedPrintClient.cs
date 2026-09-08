@@ -1,4 +1,4 @@
-namespace WebPrintService.Services;
+﻿namespace WebPrintService.Services;
 
 /// <summary>
 /// Caches the printer list for a few seconds.
@@ -60,11 +60,11 @@ public class CachedPrintClient : IPrintClient
     /// after an operation that changes what the list should say.</summary>
     public void Invalidate() => _cachedAt = DateTime.MinValue;
 
-    public Task<(bool success, string message)> PrintFileAsync(string printerId, string filePath, string? jobTitle = null)
-        => _inner.PrintFileAsync(printerId, filePath, jobTitle);
+    public Task<(bool success, string message)> PrintFileAsync(string printerId, string filePath, string? jobTitle = null, Func<string, Task>? onJobQueued = null)
+        => _inner.PrintFileAsync(printerId, filePath, jobTitle, onJobQueued);
 
-    public Task<(bool success, string message)> PrintFromUrlAsync(string printerId, string url, string? jobTitle = null, HttpClient? http = null)
-        => _inner.PrintFromUrlAsync(printerId, url, jobTitle, http);
+    public Task<(bool success, string message)> PrintFromUrlAsync(string printerId, string url, string? jobTitle = null, HttpClient? http = null, Func<string, Task>? onJobQueued = null)
+        => _inner.PrintFromUrlAsync(printerId, url, jobTitle, http, onJobQueued);
 
     public Task<string> GetPrinterStatusAsync(string printerId)
         => _inner.GetPrinterStatusAsync(printerId);
