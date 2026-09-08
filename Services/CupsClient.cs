@@ -93,10 +93,22 @@ public class CupsClient : IPrintClient
     }
 
     /// <summary>
-    /// How long to wait for a submitted CUPS job to leave the queue before giving up on it.
-    /// Kept below the kiosk's own print timeout so the service decides the outcome, not the client.
+    /// Backstop for a job that neither finishes nor looks stalled. Kept below the kiosk's
+    /// own print timeout so the service decides the outcome, not the client.
     /// </summary>
     private static readonly TimeSpan JobWaitTimeout = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// How long a job may sit in the queue with the printer printing nothing before it is
+    /// called dead, so a driver is not left waiting out the full timeout to be told the
+    /// ticket is not coming.
+    ///
+    /// Deliberately longer than a whole healthy print takes. CUPS reports "now printing"
+    /// from the moment it starts a job's filters, so a real print should never look idle —
+    /// but calling a good print dead is far worse than waiting a few seconds longer on a
+    /// bad one, so the margin errs that way.
+    /// </summary>
+    private static readonly TimeSpan StalledAfter = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Print a file (PDF, image, etc.) to a specific printer.
@@ -151,12 +163,18 @@ public class CupsClient : IPrintClient
     }
 
     /// <summary>
-    /// Poll CUPS until the job drains out of the queue. Returns false if it is still sitting there
-    /// when the timeout expires, or if the queue itself stopped (a failed filter disables it).
+    /// Poll CUPS until the job drains out of the queue.
+    ///
+    /// A job still in the queue is only healthy if the printer is working. "lpstat -p"
+    /// distinguishes the two: "now printing" means it is chewing through the queue — ours
+    /// or one ahead of it — while an idle printer holding a queued job means nothing has
+    /// picked the job up. That is what a job killed in the filter chain looks like, and
+    /// spotting it takes seconds instead of waiting out the whole timeout.
     /// </summary>
     private async Task<(bool completed, string reason)> WaitForJobAsync(string printerId, string jobId)
     {
         var deadline = DateTime.UtcNow + JobWaitTimeout;
+        DateTime? idleSince = null;
 
         while (DateTime.UtcNow < deadline)
         {
@@ -176,10 +194,23 @@ public class CupsClient : IPrintClient
                 return (true, "");
             }
 
-            // CUPS disables the queue when a filter fails — no point waiting out the timeout
-            var (stateCode, state) = await RunCommandAsync("lpstat", $"-p {printerId}");
-            if (stateCode == 0 && state.Contains("disabled", StringComparison.OrdinalIgnoreCase))
-                return (false, state.Trim());
+            var (stateCode, stateOut) = await RunCommandAsync("lpstat", $"-p {printerId}");
+            if (stateCode != 0) continue; // no reading on the printer — let the timeout decide
+            var state = stateOut.Trim();
+
+            // A failed filter can stop the queue outright, which is decisive on its own.
+            if (state.Contains("disabled", StringComparison.OrdinalIgnoreCase))
+                return (false, state);
+
+            if (state.Contains("now printing", StringComparison.OrdinalIgnoreCase))
+            {
+                idleSince = null; // making progress
+                continue;
+            }
+
+            idleSince ??= DateTime.UtcNow;
+            if (DateTime.UtcNow - idleSince.Value >= StalledAfter)
+                return (false, $"queued on {printerId} but nothing is printing it: {state}");
         }
 
         return (false, $"still queued after {JobWaitTimeout.TotalSeconds:0}s");
