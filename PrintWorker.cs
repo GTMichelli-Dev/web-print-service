@@ -100,6 +100,33 @@ public class PrintWorker : BackgroundService
     private async Task JoinGroups()
     {
         await _connection!.InvokeAsync("JoinPrintGroup", _serviceId);
+        await ReportVersion();
+    }
+
+    /// <summary>
+    /// Tells the server which build is running out here, so Setup > Services can
+    /// confirm an update actually landed without a trip to the print station.
+    ///
+    /// Reported as not released with the server: this service has its own repo
+    /// and its own release line, so Foundation's version is not a yardstick for
+    /// it. The Services tab shows the version without a verdict. The kiosk print
+    /// agent, which does ship from the Foundation repo, reports true.
+    ///
+    /// Best effort by design: a server older than this handshake has no such hub
+    /// method and will fault the invocation. That must not take the connection
+    /// down with it — printing tickets matters, reporting a version does not.
+    /// </summary>
+    private async Task ReportVersion()
+    {
+        var version = typeof(PrintWorker).Assembly.GetName().Version?.ToString() ?? "unknown";
+        try
+        {
+            await _connection!.InvokeAsync("ReportServiceVersion", "Print service", _serviceId, version, false);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Server did not accept a version report; it is probably older than this build.");
+        }
     }
 
     private async Task AnnouncePrinters()
