@@ -42,7 +42,10 @@ jobs:
         run: |
           set -euo pipefail
           for RID in linux-arm64 linux-x64 win-x64; do
-            dotnet publish PiPrintService.csproj -c Release -r "$RID" --self-contained true               -o "out/$RID/app" -p:PublishSingleFile=false
+            # -p:Version so the built service reports the release it shipped in.
+            # Without it every build called itself 1.0.0, and Foundation's
+            # Setup > Services tab showed that same 1.0.0 for every release.
+            dotnet publish PiPrintService.csproj -c Release -r "$RID" --self-contained true               -o "out/$RID/app" -p:PublishSingleFile=false -p:Version="${{ steps.ver.outputs.version }}"
             # Each package carries ONLY its own platform's installer. Shipping
             # both put an install.ps1 in the Pi tarball and an install.sh in the
             # Windows zip, which is just something else for an operator to pick

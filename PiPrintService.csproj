@@ -5,6 +5,15 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>WebPrintService</RootNamespace>
+    <!--
+      Fallback for local builds only. The release workflow passes -p:Version
+      from the git tag, so a published service reports the release it shipped
+      in. There was no Version at all before, so every build called itself
+      1.0.0 — including all eleven releases. Leave AssemblyVersion, FileVersion
+      and InformationalVersion unset: the SDK derives them from this, and
+      pinning them would beat the tag.
+    -->
+    <Version>1.0.11</Version>
   </PropertyGroup>
 
   <ItemGroup>
