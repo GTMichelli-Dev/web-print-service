@@ -198,6 +198,27 @@ jobs:
           The printers then appear on the web app under
           **Setup → Options → Printers**.
 
+          ## Several sites
+
+          One printer can work for several Foundation sites at once - a scale house
+          several companies share, for example. Give every site's URL. On Windows,
+          in quotes and separated by commas (unquoted, Windows splits the list at
+          each comma):
+
+          \`\`\`
+          INSTALL.bat "https://site-one.example.com,https://site-two.example.com"
+          \`\`\`
+
+          On a Pi, separated by spaces:
+
+          \`\`\`
+          sudo bash /tmp/wps/install.sh https://site-one.example.com https://site-two.example.com
+          \`\`\`
+
+          Each site gets its own connection and retries. A print job fetches its
+          ticket PDF from, and reports back to, the site that sent it. On **each**
+          site, pick this PC's printers for each scale on the Scales page.
+
           ## Pi git auth
 
           Nothing above needs git on the target — that is the point of shipping
