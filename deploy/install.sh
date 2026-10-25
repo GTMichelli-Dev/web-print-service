@@ -82,7 +82,7 @@ while [[ $# -gt 0 ]]; do
         --force-hostname)  FORCE_HOSTNAME="yes"; shift ;;
         --help|-h)
             cat <<HELP
-Usage: install.sh <web-server-url> [options]
+Usage: install.sh <web-server-url> [<web-server-url> ...] [options]
 
   <web-server-url>        Required. URL of the Foundation web server.
                           Examples:
@@ -121,11 +121,12 @@ HELP
             exit 1
             ;;
         *)
+            # Each URL is another site this printer works for; the service
+            # keeps them as one comma-separated ServerUrl.
             if [ -z "$WEB_URL" ]; then
                 WEB_URL="$1"
             else
-                echo "Unknown argument: $1"
-                exit 1
+                WEB_URL="${WEB_URL},$1"
             fi
             shift
             ;;
@@ -169,47 +170,54 @@ if [ -z "$WEB_URL" ]; then
     fi
 fi
 
-# Reachability check. Non-interactive runs abort on an unreachable URL;
-# interactive runs let the operator retype or accept-anyway, since the print
-# service retries forever in the background and a greenfield site may not
-# have its web app up yet.
-while true; do
-    if url_reachable "$WEB_URL"; then
-        echo "  ${WEB_URL} is reachable."
-        break
-    fi
-    echo "  WARNING: Cannot reach ${WEB_URL} (no HTTP response within ${PROBE_MAX_TIME}s)."
-    echo "  Check the host, port, and network — and that the web app is running."
-    if [ ! -t 0 ]; then
-        echo "  Non-interactive shell — aborting. Re-run with a valid URL."
-        exit 1
-    fi
-    printf "  Re-enter URL, or press Enter to continue anyway with '%s': " "$WEB_URL"
-    read -r new_url
-    if [ -z "$new_url" ]; then
-        echo "  Continuing with ${WEB_URL}. The print service will retry until the web app is up."
-        break
-    fi
-    WEB_URL="$new_url"
-done
+# Several sites share this printer: each URL is checked on its own, and
+# WEB_URL is rebuilt from the checked (and possibly corrected) addresses.
+CHECKED_URLS=""
+for ONE_URL in $(echo "$WEB_URL" | tr ',;' '  '); do
+    # Reachability check. Non-interactive runs abort on an unreachable URL;
+    # interactive runs let the operator retype or accept-anyway, since the print
+    # service retries forever in the background and a greenfield site may not
+    # have its web app up yet.
+    while true; do
+        if url_reachable "$ONE_URL"; then
+            echo "  ${ONE_URL} is reachable."
+            break
+        fi
+        echo "  WARNING: Cannot reach ${ONE_URL} (no HTTP response within ${PROBE_MAX_TIME}s)."
+        echo "  Check the host, port, and network — and that the web app is running."
+        if [ ! -t 0 ]; then
+            echo "  Non-interactive shell — aborting. Re-run with a valid URL."
+            exit 1
+        fi
+        printf "  Re-enter URL, or press Enter to continue anyway with '%s': " "$ONE_URL"
+        read -r new_url
+        if [ -z "$new_url" ]; then
+            echo "  Continuing with ${ONE_URL}. The print service will retry until the web app is up."
+            break
+        fi
+        ONE_URL="$new_url"
+    done
 
-# ---- Upgrade http:// -> https:// when the server redirects ----
-# Sites deployed behind the Foundation nginx config answer :80 with a blanket
-# 301 to https. SignalR's negotiate is a POST, and every standard HTTP client
-# (including the .NET one this service uses) downgrades POST to GET when it
-# follows a 301 — the hub then answers 405 and the service never connects.
-# The reachability check above is happy with a 301, so catch it here instead.
-if [[ "$WEB_URL" == http://* ]]; then
-    redirect_target=$(curl -s -o /dev/null --max-time "$PROBE_MAX_TIME" \
-        --connect-timeout "$PROBE_CONNECT_TIMEOUT" \
-        -w "%{redirect_url}" "$WEB_URL" 2>/dev/null) || true
-    if [[ "$redirect_target" == https://* ]]; then
-        WEB_URL="https://${WEB_URL#http://}"
-        WEB_URL="${WEB_URL%/}"
-        echo "  Server redirects to HTTPS — using ${WEB_URL} instead."
-        echo "  (SignalR cannot negotiate through an http->https redirect.)"
+    # ---- Upgrade http:// -> https:// when the server redirects ----
+    # Sites deployed behind the Foundation nginx config answer :80 with a blanket
+    # 301 to https. SignalR's negotiate is a POST, and every standard HTTP client
+    # (including the .NET one this service uses) downgrades POST to GET when it
+    # follows a 301 — the hub then answers 405 and the service never connects.
+    # The reachability check above is happy with a 301, so catch it here instead.
+    if [[ "$ONE_URL" == http://* ]]; then
+        redirect_target=$(curl -s -o /dev/null --max-time "$PROBE_MAX_TIME" \
+            --connect-timeout "$PROBE_CONNECT_TIMEOUT" \
+            -w "%{redirect_url}" "$ONE_URL" 2>/dev/null) || true
+        if [[ "$redirect_target" == https://* ]]; then
+            ONE_URL="https://${ONE_URL#http://}"
+            ONE_URL="${ONE_URL%/}"
+            echo "  Server redirects to HTTPS — using ${ONE_URL} instead."
+            echo "  (SignalR cannot negotiate through an http->https redirect.)"
+        fi
     fi
-fi
+    CHECKED_URLS="${CHECKED_URLS:+${CHECKED_URLS},}${ONE_URL}"
+done
+WEB_URL="$CHECKED_URLS"
 
 # Prompt for the printer queue name if not provided via --printer-name.
 # Default to KioskPrinter — this queue is the BIXOLON receipt printer in the

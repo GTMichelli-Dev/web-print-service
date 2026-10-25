@@ -107,6 +107,24 @@ Self-contained — no .NET, no SDK and no git needed on that PC. Full option set
 and the printing gotchas that bite on Windows are in
 [Install on Windows](#install-on-windows).
 
+### Several sites
+
+A printer several companies share serves every company's site. Give each
+site's URL. On Linux, separate them with spaces or commas; on Windows, put the
+list in quotes, separated by commas (unquoted, Windows splits it at each comma):
+
+```bash
+bash /tmp/wps/deploy/install.sh https://agnw.scaledata.net https://crs.scaledata.net
+INSTALL.bat "https://agnw.scaledata.net,https://crs.scaledata.net"
+powershell -ExecutionPolicy Bypass -File install.ps1 -WebUrl "https://agnw.scaledata.net,https://crs.scaledata.net"
+```
+
+They are kept as one comma-separated `serverUrl`. The service opens one
+connection per site, each with its own retries, so a site that is down does not
+affect the others. Every site sees the printers as its own and assigns them on
+its own **Setup → Printers** page. A print job fetches its PDF from the site
+that sent it.
+
 ### Development
 
 ```bash
@@ -206,7 +224,7 @@ Get current service settings.
 ```
 
 #### `PUT /api/settings`
-Update service settings. Triggers a reconnect to the web app.
+Update service settings. Triggers a reconnect to each web app in `serverUrl`.
 
 **Request:**
 ```json
@@ -458,3 +476,6 @@ curl -X PUT http://localhost:5230/api/settings \
   -H "Content-Type: application/json" \
   -d '{"serverUrl": "https://your-server", "serviceId": "office-printer"}'
 ```
+
+`serverUrl` takes one URL or several, separated by commas, semicolons, spaces
+or new lines — see [Several sites](#several-sites).

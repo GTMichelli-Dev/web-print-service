@@ -11,6 +11,11 @@ namespace WebPrintService;
 /// <summary>
 /// Background worker that connects to the web app via SignalR,
 /// listens for print commands, and prints via CUPS (Linux/macOS) or Windows Print.
+///
+/// ServerUrl may name several Foundation sites (see ServerUrls): a printer at a
+/// scale several companies share prints for all of them. Each site is its own
+/// connection with its own retries, and a print job's PDF is fetched from, and
+/// its result reported to, the site that sent it.
 /// </summary>
 public class PrintWorker : BackgroundService
 {
@@ -19,8 +24,11 @@ public class PrintWorker : BackgroundService
     private readonly IPrintClient _printer;
     private readonly RestartSignal _restart;
     private readonly IHttpClientFactory _httpFactory;
-    private HubConnection? _connection;
     private string _serviceId = "default";
+
+    // The sites connected right now, for announcing printers to all of them.
+    private readonly List<HubConnection> _connections = new();
+    private readonly object _connectionsLock = new();
 
     public PrintWorker(IServiceProvider sp, ILogger<PrintWorker> log, IPrintClient printer,
         RestartSignal restart, IHttpClientFactory httpFactory)
@@ -39,48 +47,94 @@ public class PrintWorker : BackgroundService
             try
             {
                 _restart.Reset();
-                var (serverUrl, hubPath) = await LoadSettings();
+                var (serverUrlSetting, hubPath) = await LoadSettings();
 
-                _log.LogInformation("Connecting to {Url}{Hub}", serverUrl, hubPath);
+                foreach (var bad in ServerUrls.Rejected(serverUrlSetting))
+                    _log.LogWarning("Ignoring \"{Entry}\" in ServerUrl: not an http:// or https:// address.", bad);
+                var sites = ServerUrls.Parse(serverUrlSetting);
+                if (sites.Count == 0)
+                    throw new InvalidOperationException($"ServerUrl has no usable address (\"{serverUrlSetting}\").");
+                if (sites.Count > 1)
+                    _log.LogInformation("Serving {Count} sites: {Sites}", sites.Count, string.Join(", ", sites));
 
-                _connection = new HubConnectionBuilder()
-                    .WithUrl($"{serverUrl}{hubPath}")
-                    .WithAutomaticReconnect(new ForeverRetryPolicy())
-                    .Build();
-
-                _connection.Reconnecting += _ =>
-                {
-                    _log.LogWarning("Connection lost. Reconnecting...");
-                    return Task.CompletedTask;
-                };
-
-                _connection.Reconnected += async _ =>
-                {
-                    _log.LogInformation("Reconnected. Rejoining print groups...");
-                    await JoinGroups();
-                    await AnnouncePrinters();
-                };
-
-                RegisterHandlers();
-
-                await _connection.StartAsync(ct);
-                _log.LogInformation("Connected. Joining print groups (ServiceId={ServiceId})...", _serviceId);
-                await JoinGroups();
-                await AnnouncePrinters();
+                // One connection per site until a restart (settings changed) or shutdown.
+                using var siteCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var running = sites.Select(site => RunSite(site, hubPath, siteCts.Token)).ToList();
 
                 // Wait for restart signal or cancellation
                 await Task.Run(() => _restart.WaitForRestart(Timeout.InfiniteTimeSpan), ct);
                 _log.LogInformation("Restart triggered. Reconnecting...");
 
-                try { await _connection.DisposeAsync(); } catch { }
+                siteCts.Cancel();
+                await Task.WhenAll(running);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
                 _log.LogWarning("Connection error: {Msg}. Retrying in 5s...", ex.Message);
-                try { if (_connection != null) await _connection.DisposeAsync(); } catch { }
                 await Task.Delay(5000, ct);
             }
+        }
+    }
+
+    /// <summary>
+    /// One site: connect, join, announce, then wait. A site that can't be
+    /// reached is tried again every 5 seconds without touching the others;
+    /// once connected, the connection reconnects on its own.
+    /// </summary>
+    private async Task RunSite(string serverUrl, string hubPath, CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            HubConnection? connection = null;
+            try
+            {
+                _log.LogInformation("Connecting to {Url}{Hub}", serverUrl, hubPath);
+
+                connection = new HubConnectionBuilder()
+                    .WithUrl($"{serverUrl}{hubPath}")
+                    .WithAutomaticReconnect(new ForeverRetryPolicy())
+                    .Build();
+
+                connection.Reconnecting += _ =>
+                {
+                    _log.LogWarning("Connection to {Url} lost. Reconnecting...", serverUrl);
+                    return Task.CompletedTask;
+                };
+
+                connection.Reconnected += async _ =>
+                {
+                    _log.LogInformation("Reconnected to {Url}. Rejoining print groups...", serverUrl);
+                    await JoinGroups(connection);
+                    await AnnouncePrinters(connection);
+                };
+
+                RegisterHandlers(connection, serverUrl);
+
+                await connection.StartAsync(token);
+                lock (_connectionsLock) _connections.Add(connection);
+                _log.LogInformation("Connected to {Url}. Joining print groups (ServiceId={ServiceId})...", serverUrl, _serviceId);
+                await JoinGroups(connection);
+                await AnnouncePrinters(connection);
+
+                await Task.Delay(Timeout.Infinite, token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                _log.LogWarning("Connection to {Url} failed: {Msg}. Retrying in 5s...", serverUrl, ex.Message);
+            }
+            finally
+            {
+                if (connection != null)
+                {
+                    lock (_connectionsLock) _connections.Remove(connection);
+                    try { await connection.DisposeAsync(); } catch { }
+                }
+            }
+
+            if (token.IsCancellationRequested) break;
+            try { await Task.Delay(5000, token); } catch (OperationCanceledException) { break; }
         }
     }
 
@@ -97,10 +151,10 @@ public class PrintWorker : BackgroundService
         return ("http://localhost:5110", "/scaleHub");
     }
 
-    private async Task JoinGroups()
+    private async Task JoinGroups(HubConnection connection)
     {
-        await _connection!.InvokeAsync("JoinPrintGroup", _serviceId);
-        await ReportVersion();
+        await connection.InvokeAsync("JoinPrintGroup", _serviceId);
+        await ReportVersion(connection);
     }
 
     /// <summary>
@@ -116,12 +170,12 @@ public class PrintWorker : BackgroundService
     /// method and will fault the invocation. That must not take the connection
     /// down with it — printing tickets matters, reporting a version does not.
     /// </summary>
-    private async Task ReportVersion()
+    private async Task ReportVersion(HubConnection connection)
     {
         var version = typeof(PrintWorker).Assembly.GetName().Version?.ToString() ?? "unknown";
         try
         {
-            await _connection!.InvokeAsync("ReportServiceVersion", "Print service", _serviceId, version, false);
+            await connection.InvokeAsync("ReportServiceVersion", "Print service", _serviceId, version, false);
         }
         catch (Exception ex)
         {
@@ -129,14 +183,14 @@ public class PrintWorker : BackgroundService
         }
     }
 
-    private async Task AnnouncePrinters()
+    private async Task AnnouncePrinters(HubConnection connection)
     {
-        if (_connection?.State != HubConnectionState.Connected) return;
+        if (connection.State != HubConnectionState.Connected) return;
 
         try
         {
             var printers = await _printer.GetPrintersAsync();
-            await _connection.InvokeAsync("PrintServiceReady", new
+            await connection.InvokeAsync("PrintServiceReady", new
             {
                 serviceId = _serviceId,
                 hostname = Environment.MachineName,
@@ -186,10 +240,12 @@ public class PrintWorker : BackgroundService
         OperatingSystem.IsWindows() ? "Windows" :
         OperatingSystem.IsMacOS() ? "macOS" : "Linux";
 
-    private void RegisterHandlers()
+    /// <summary>What a site may ask of this service. Every answer goes back on
+    /// <paramref name="connection"/>, the site that asked.</summary>
+    private void RegisterHandlers(HubConnection connection, string serverUrl)
     {
         // Print ticket command from web app
-        _connection!.On<JsonElement>("PrintTicket", async (data) =>
+        connection.On<JsonElement>("PrintTicket", async (data) =>
         {
             try
             {
@@ -202,7 +258,7 @@ public class PrintWorker : BackgroundService
 
                 if (string.IsNullOrEmpty(ticketId))
                 {
-                    await ReportPrintResult(false, "No ticket ID provided");
+                    await ReportPrintResult(connection, false, "No ticket ID provided");
                     return;
                 }
 
@@ -219,38 +275,37 @@ public class PrintWorker : BackgroundService
                     var defaultPrinter = printers.FirstOrDefault(p => p.IsDefault) ?? printers.FirstOrDefault();
                     if (defaultPrinter == null)
                     {
-                        await ReportPrintResult(false, "No printers available");
+                        await ReportPrintResult(connection, false, "No printers available");
                         return;
                     }
                     cupsPrinterId = defaultPrinter.PrinterId;
                 }
 
-                // Build PDF URL
-                var settings = await GetSettings();
-                var pdfUrl = $"{settings.ServerUrl}/api/ticket/{ticketId}/pdf";
+                // The ticket's PDF, from the site that sent the job
+                var pdfUrl = $"{serverUrl}/api/ticket/{ticketId}/pdf";
 
                 _log.LogInformation("Printing ticket {Ticket} to {Printer} from {Url}", ticketId, cupsPrinterId, pdfUrl);
 
                 var http = _httpFactory.CreateClient();
                 var (success, message) = await _printer.PrintFromUrlAsync(cupsPrinterId, pdfUrl, $"Ticket-{ticketId}", http,
-                    jobId => ReportPrintJobStarted(ticketId, cupsPrinterId, jobId));
+                    jobId => ReportPrintJobStarted(connection, ticketId, cupsPrinterId, jobId));
 
-                await ReportPrintResult(success, success ? $"Ticket {ticketId} sent to {cupsPrinterId}" : message, ticketId);
+                await ReportPrintResult(connection, success, success ? $"Ticket {ticketId} sent to {cupsPrinterId}" : message, ticketId);
             }
             catch (Exception ex)
             {
                 _log.LogError("PrintTicket failed: {Msg}", ex.Message);
-                await ReportPrintResult(false, ex.Message);
+                await ReportPrintResult(connection, false, ex.Message);
             }
         });
 
         // Request printer list
-        _connection!.On("GetPrinterList", async () =>
+        connection.On("GetPrinterList", async () =>
         {
             try
             {
                 var printers = await _printer.GetPrintersAsync();
-                await _connection!.InvokeAsync("PrinterListResponse", new
+                await connection.InvokeAsync("PrinterListResponse", new
                 {
                     serviceId = _serviceId,
                     hostname = Environment.MachineName,
@@ -274,14 +329,14 @@ public class PrintWorker : BackgroundService
         });
 
         // Reload config
-        _connection!.On("ReloadConfig", () =>
+        connection.On("ReloadConfig", () =>
         {
             _log.LogInformation("Received ReloadConfig. Restarting...");
             _restart.TriggerRestart();
         });
 
         // Test print
-        _connection!.On<string>("TestPrint", async (printerId) =>
+        connection.On<string>("TestPrint", async (printerId) =>
         {
             _log.LogInformation("Received TestPrint for printer: {Printer}", printerId);
             try
@@ -305,7 +360,7 @@ public class PrintWorker : BackgroundService
 
                 try { File.Delete(testFile); } catch { }
 
-                await _connection!.InvokeAsync("TestPrintResult", new
+                await connection.InvokeAsync("TestPrintResult", new
                 {
                     serviceId = _serviceId,
                     printerId,
@@ -315,7 +370,7 @@ public class PrintWorker : BackgroundService
             }
             catch (Exception ex)
             {
-                await _connection!.InvokeAsync("TestPrintResult", new
+                await connection.InvokeAsync("TestPrintResult", new
                 {
                     serviceId = _serviceId,
                     printerId,
@@ -326,13 +381,13 @@ public class PrintWorker : BackgroundService
         });
     }
 
-    private async Task ReportPrintResult(bool success, string message, string? ticketId = null)
+    private async Task ReportPrintResult(HubConnection connection, bool success, string message, string? ticketId = null)
     {
-        if (_connection?.State == HubConnectionState.Connected)
+        if (connection.State == HubConnectionState.Connected)
         {
             try
             {
-                await _connection.InvokeAsync("PrintResult", new
+                await connection.InvokeAsync("PrintResult", new
                 {
                     serviceId = _serviceId,
                     ticketId,
@@ -348,15 +403,15 @@ public class PrintWorker : BackgroundService
     /// Tells the web app the spooler has taken the job. The kiosk switches to "Printing Ticket"
     /// here, and stays there until the matching PrintResult says the job is done.
     /// </summary>
-    private async Task ReportPrintJobStarted(string ticketId, string printerId, string jobId)
+    private async Task ReportPrintJobStarted(HubConnection connection, string ticketId, string printerId, string jobId)
     {
         _log.LogInformation("Job {Job} started for ticket {Ticket} on {Printer}", jobId, ticketId, printerId);
 
-        if (_connection?.State == HubConnectionState.Connected)
+        if (connection.State == HubConnectionState.Connected)
         {
             try
             {
-                await _connection.InvokeAsync("PrintJobStarted", new
+                await connection.InvokeAsync("PrintJobStarted", new
                 {
                     serviceId = _serviceId,
                     ticketId,
@@ -366,13 +421,6 @@ public class PrintWorker : BackgroundService
             }
             catch { }
         }
-    }
-
-    private async Task<ServiceSettings> GetSettings()
-    {
-        using var scope = _sp.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<PrintDbContext>();
-        return await db.Settings.OrderBy(s => s.Id).FirstAsync();
     }
 }
 

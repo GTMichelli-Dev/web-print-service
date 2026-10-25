@@ -24,6 +24,13 @@ The same command handles a fresh install and an update, and is safe to re-run.
         Name this PC on the web app's Printers page. Defaults to the computer
         name, which is usually what you want.
 
+    INSTALL.bat "https://agnw.scaledata.net,https://crs.scaledata.net"
+        A printer several companies share: every company's site, in quotes and
+        separated by commas (unquoted, Windows splits the list at each comma).
+        One connection per site, each with its own retries. Every site assigns
+        the printers on its own Printers page, and a print job fetches its PDF
+        from the site that sent it.
+
     INSTALL.bat https://your-web-app-url -TestPrinter "Zebra ZD421"
         Print a test page at the end, so the install is proved rather than
         assumed. The name must match one the service reports - the installer

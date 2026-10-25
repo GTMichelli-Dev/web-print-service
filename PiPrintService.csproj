@@ -13,7 +13,7 @@
       and InformationalVersion unset: the SDK derives them from this, and
       pinning them would beat the tag.
     -->
-    <Version>1.0.11</Version>
+    <Version>1.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

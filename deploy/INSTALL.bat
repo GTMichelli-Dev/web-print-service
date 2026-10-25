@@ -11,6 +11,10 @@ REM    INSTALL.bat https://valleyag.scaledata.net
 REM    INSTALL.bat https://valleyag.scaledata.net -ServiceId scalehouse
 REM    INSTALL.bat https://valleyag.scaledata.net -TestPrinter "Zebra ZD421"
 REM
+REM  A printer several companies share: every company's site, in quotes and
+REM  separated by commas (unquoted, Windows splits the list at each comma).
+REM    INSTALL.bat "https://agnw.scaledata.net,https://crs.scaledata.net"
+REM
 REM  Everything after the URL is passed through to install.ps1.
 REM  Run  powershell -File install.ps1 -?  to see all options.
 REM ===========================================================================
